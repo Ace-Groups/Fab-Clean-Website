@@ -244,6 +244,12 @@ export default function BookNowPage() {
   } | null>(null);
 
   // Format phone input & auto-trigger lookup on 10 digits
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.pathname === "/book-now") {
+      window.history.replaceState(null, "", "/book_now" + window.location.search);
+    }
+  }, []);
+
   const handlePhoneChange = (val: string) => {
     const cleaned = val.replace(/\D/g, "").slice(0, 10);
     setPhone(cleaned);
@@ -485,7 +491,7 @@ export default function BookNowPage() {
       <SEO
         title="Diwali Mega Offer | 50% Flat Off Dry Cleaning - Book Now"
         description="Book your Diwali dry cleaning pickup in 30 seconds. Flat 50% OFF on suits, sarees, blazers & blankets with coupon FABDIWALI. Doorstep pickup across Pollachi, Kinathukadavu, MCET & Udumalpet."
-        canonical="https://myfabclean.com/book-now"
+        canonical="https://myfabclean.com/book_now"
       />
 
       {/* RICH DECORATIVE FESTIVE BACKGROUND PATTERN */}

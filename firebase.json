@@ -82,6 +82,13 @@
         ]
       }
     ],
+    "redirects": [
+      {
+        "source": "/book-now",
+        "destination": "/book_now",
+        "type": 301
+      }
+    ],
     "rewrites": [
       {
         "source": "**",

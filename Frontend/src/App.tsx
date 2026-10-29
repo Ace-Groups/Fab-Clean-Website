@@ -48,6 +48,7 @@ function Router() {
         <Route path="/login" component={Login} />
         <Route path="/register" component={Register} />
         <Route path="/schedule-pickup" component={SchedulePickup} />
+        <Route path="/book_now" component={BookNow} />
         <Route path="/book-now" component={BookNow} />
         <Route path="/diwali" component={BookNow} />
         <Route path="/diwali-offer" component={BookNow} />
