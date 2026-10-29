@@ -37,18 +37,6 @@ export const DEFAULT_STORES: Store[] = [
     mapHref: "https://maps.google.com/?q=Fab+Clean+Kinathukadavu",
   },
   {
-    id: "mcet",
-    slug: "mcet",
-    name: "MCET Campus",
-    address: "MCET College Campus, Udumalai Road, Pollachi - 642003",
-    phone: "+91 93630 59595",
-    email: "mcet@myfabclean.com",
-    latitude: 10.6811,
-    longitude: 77.0195,
-    coverageRadiusKm: 5,
-    mapHref: "https://maps.google.com/?q=MCET+Campus+Pollachi",
-  },
-  {
     id: "udumalpet",
     slug: "udumalpet",
     name: "Udumalpet",

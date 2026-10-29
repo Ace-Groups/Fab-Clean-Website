@@ -191,7 +191,6 @@ const POSTER_SERVICES: PosterServiceItem[] = [
 const BRANCH_COORDINATES: Record<string, { lat: number; lng: number; name: string }> = {
   POL: { lat: 10.6609, lng: 77.0048, name: "Pollachi Main Hub" },
   KIN: { lat: 10.8228, lng: 77.0189, name: "Kinathukadavu Branch" },
-  MCET: { lat: 10.6811, lng: 77.0195, name: "MCET Campus Hub" },
   UDM: { lat: 10.5873, lng: 77.2476, name: "Udumalaipettai Hub" },
 };
 
@@ -274,7 +273,7 @@ export default function BookNowPage() {
         if (result.address) setAddress(result.address);
         if (result.branch) {
           const upper = result.branch.toUpperCase();
-          if (["POL", "KIN", "MCET", "UDM"].includes(upper)) {
+          if (["POL", "KIN", "UDM"].includes(upper)) {
             setSelectedBranch(upper);
           }
         }
@@ -490,7 +489,7 @@ export default function BookNowPage() {
     <div className="relative min-h-screen bg-[#02130C] text-slate-100 selection:bg-amber-500 selection:text-black">
       <SEO
         title="Diwali Mega Offer | 50% Flat Off Dry Cleaning - Book Now"
-        description="Book your Diwali dry cleaning pickup in 30 seconds. Flat 50% OFF on suits, sarees, blazers & blankets with coupon FABDIWALI. Doorstep pickup across Pollachi, Kinathukadavu, MCET & Udumalpet."
+        description="Book your Diwali dry cleaning pickup in 30 seconds. Flat 50% OFF on suits, sarees, blazers & blankets with coupon FABDIWALI. Doorstep pickup across Pollachi, Kinathukadavu & Udumalpet."
         canonical="https://myfabclean.com/book_now"
       />
 
@@ -891,11 +890,10 @@ export default function BookNowPage() {
                   {/* STORE HUB SELECTION */}
                   <div className="mt-4">
                     <label className="text-xs font-bold text-emerald-200/80">Nearest Store Hub</label>
-                    <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div className="mt-1.5 grid grid-cols-3 gap-2">
                       {[
                         { code: "POL", label: "Pollachi Main" },
                         { code: "KIN", label: "Kinathukadavu" },
-                        { code: "MCET", label: "MCET Campus" },
                         { code: "UDM", label: "Udumalpet" },
                       ].map((b) => (
                         <button
