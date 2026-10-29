@@ -178,6 +178,12 @@ export function Navbar() {
           </nav>
 
           <div className="hidden items-center gap-2 lg:flex">
+            <Link href="/book-now" data-cursor-label="Diwali Offer">
+              <Button size="sm" className="bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white border-none shadow-sm gap-1.5 font-medium">
+                <span>🪔</span>
+                <span>Diwali 50% Off</span>
+              </Button>
+            </Link>
             {isAuthenticated ? (
               <ProfileDropdown />
             ) : (
@@ -186,7 +192,7 @@ export function Navbar() {
               </Link>
             )}
             <Link href="/schedule-pickup" data-cursor-label="Book">
-              <Button size="sm">Book Pickup</Button>
+              <Button size="sm" variant="outline">Book Pickup</Button>
             </Link>
           </div>
 
@@ -249,8 +255,14 @@ export function Navbar() {
                     <Button variant="ghost" className="w-full">Login</Button>
                   </Link>
                 )}
+                <Link href="/book-now">
+                  <Button className="w-full bg-gradient-to-r from-amber-600 to-amber-700 text-white gap-2 font-bold mb-2">
+                    <span>🪔</span>
+                    <span>Diwali Special (50% Off)</span>
+                  </Button>
+                </Link>
                 <Link href="/schedule-pickup">
-                  <Button className="w-full">Book Pickup</Button>
+                  <Button variant="outline" className="w-full">Regular Pickup</Button>
                 </Link>
               </div>
             </motion.div>

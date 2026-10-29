@@ -1,8 +1,15 @@
 {
   "projects": {
-    "default": "fab-clean-official",
-    "artifacts/fab-clean/dist/public": "fab-clean-official"
+    "default": "fab-clean-env-1234"
   },
-  "targets": {},
+  "targets": {
+    "fab-clean-env-1234": {
+      "hosting": {
+        "website": [
+          "fab-clean-website"
+        ]
+      }
+    }
+  },
   "etags": {}
 }

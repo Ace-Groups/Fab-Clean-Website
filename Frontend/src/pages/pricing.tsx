@@ -7,6 +7,7 @@ import { SEO } from "@/components/seo";
 import { Button, FadeIn, SectionHeading } from "@/components/ui";
 import { PricingTable, SupportBand } from "@/components/site";
 import { formatCurrency } from "@/lib/utils";
+import { DEFAULT_PRICING } from "@/lib/site-catalog";
 
 type PricingCategory = {
   category: string;
@@ -16,7 +17,8 @@ type PricingCategory = {
 export default function Pricing() {
   const { data, isLoading } = useListPricing();
   const [filter, setFilter] = useState("Laundry");
-  const categories = (data?.data ?? []) as PricingCategory[];
+  const apiCategories = ((Array.isArray(data) ? (data as any) : data?.data) ?? []) as PricingCategory[];
+  const categories = apiCategories.length > 0 ? apiCategories : (DEFAULT_PRICING as PricingCategory[]);
 
   const grouped = useMemo(() => {
     const buckets: Record<string, PricingCategory[]> = {

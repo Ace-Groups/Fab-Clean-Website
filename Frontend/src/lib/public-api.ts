@@ -108,21 +108,26 @@ export type HomepageReviewsResponse = {
   latestReviews: HomepageReview[];
 };
 
-export type Store = {
-  id: string;
-  slug: string;
-  name: string;
-  address: string;
-  phone: string;
-  email?: string;
-  latitude: number;
-  longitude: number;
-  coverageRadiusKm: number;
-  mapHref?: string;
-};
+import {
+  DEFAULT_STORES,
+  DEFAULT_REVIEWS,
+  type Store,
+  type HomepageReview,
+  type HomepageReviewsResponse,
+} from "./site-catalog";
+
+export type { Store, HomepageReview, HomepageReviewsResponse };
 
 export async function fetchStores() {
-  return request<{ success: boolean; data: Store[] }>("/stores");
+  try {
+    const res = await request<{ success: boolean; data: Store[] }>("/stores");
+    if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
+      return res;
+    }
+    return { success: true, data: DEFAULT_STORES };
+  } catch {
+    return { success: true, data: DEFAULT_STORES };
+  }
 }
 
 export async function trackOrderById(identifier: string) {
@@ -149,5 +154,65 @@ export async function submitPublicFeedback(payload: {
 }
 
 export async function fetchHomepageReviews() {
-  return request<{ success: boolean; data: HomepageReviewsResponse }>("/reviews/homepage");
+  try {
+    const res = await request<{ success: boolean; data: HomepageReviewsResponse }>("/reviews/homepage");
+    if (res?.success && res.data && (res.data.topReviews?.length || res.data.bestReviews?.length || res.data.latestReviews?.length)) {
+      return res;
+    }
+    return { success: true, data: DEFAULT_REVIEWS };
+  } catch {
+    return { success: true, data: DEFAULT_REVIEWS };
+  }
+}
+
+export type CustomerLookupResult = {
+  id?: string;
+  name?: string;
+  phone?: string;
+  address?: string;
+  addresses?: string[];
+  branch?: string | null;
+  totalOrders?: number;
+  isDiwaliEligible: boolean;
+  isExisting: boolean;
+};
+
+export async function lookupCustomer(phone: string): Promise<CustomerLookupResult | null> {
+  const cleanPhone = phone.replace(/\D/g, "");
+  if (cleanPhone.length < 10) return null;
+
+  try {
+    const res = await request<{ success: boolean; data: CustomerLookupResult }>(
+      `/pickups/customer-lookup?phone=${encodeURIComponent(cleanPhone)}`
+    );
+    if (res?.success && res.data) {
+      return res.data;
+    }
+    return null;
+  } catch (err) {
+    console.warn("[CustomerLookup] Request error:", err);
+    return null;
+  }
+}
+
+export type WebsitePickupPayload = {
+  name: string;
+  phone: string;
+  address: string;
+  services: string[];
+  branch: string;
+  preferredDate: string;
+  timeSlot: string;
+  specialInstructions?: string;
+  couponCode?: string;
+};
+
+export async function submitWebsitePickup(payload: WebsitePickupPayload) {
+  return request<{ success: boolean; data: { id: string; bookingReference: string; message: string } }>(
+    "/pickups",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
 }

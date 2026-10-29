@@ -13,9 +13,9 @@ export default function ReviewsPage() {
     void fetchHomepageReviews()
       .then((result) => {
         const merged = [
-          ...(result.data.topReviews || []),
-          ...(result.data.bestReviews || []),
-          ...(result.data.latestReviews || []),
+          ...(result?.data?.topReviews || []),
+          ...(result?.data?.bestReviews || []),
+          ...(result?.data?.latestReviews || []),
         ];
         const seen = new Set<string>();
         setReviews(

@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "target": "website",
     "public": "Frontend/dist-build",
     "ignore": [
       "firebase.json",
@@ -36,7 +37,7 @@
           },
           {
             "key": "Content-Security-Policy",
-            "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://www.google-analytics.com https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; media-src 'self' blob:; connect-src 'self' https://api.myfabclean.com https://backend.myfabclean.com https://*.onrender.com https://www.google-analytics.com https://firebaseapp.com https://*.firebaseio.com https://cloudflareinsights.com https://nominatim.openstreetmap.org; frame-ancestors 'none'"
+            "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://www.google-analytics.com https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; media-src 'self' blob:; connect-src 'self' https://fab-clean-api-254040893134.us-central1.run.app https://*.run.app https://api.myfabclean.com https://backend.myfabclean.com https://*.onrender.com https://www.google-analytics.com https://firebaseapp.com https://*.firebaseio.com https://cloudflareinsights.com https://nominatim.openstreetmap.org; frame-ancestors 'none'"
           }
         ]
       },

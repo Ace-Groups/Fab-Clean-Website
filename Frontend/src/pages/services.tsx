@@ -18,22 +18,25 @@ const iconMap = {
   sparkles: Sparkles,
 } as const;
 
+import { DEFAULT_SERVICES } from "@/lib/site-catalog";
+
 export default function Services() {
   const { data, isLoading } = useListServices();
   const [filter, setFilter] = useState("All");
 
   const groups = useMemo(() => {
-    const items = data?.data ?? [];
+    const rawItems = (Array.isArray(data) ? (data as any) : data?.data) ?? [];
+    const items = rawItems.length > 0 ? rawItems : DEFAULT_SERVICES;
     return {
       All: items,
-      Laundry: items.filter((service) => !service.name.toLowerCase().includes("dry")),
-      "Dry Cleaning": items.filter((service) => service.name.toLowerCase().includes("dry")),
-      Specialty: items.filter((service) => {
+      Laundry: items.filter((service: any) => !service.name.toLowerCase().includes("dry")),
+      "Dry Cleaning": items.filter((service: any) => service.name.toLowerCase().includes("dry")),
+      Specialty: items.filter((service: any) => {
         const value = service.name.toLowerCase();
         return value.includes("shoe") || value.includes("bag") || value.includes("special");
       }),
     };
-  }, [data?.data]);
+  }, [data]);
 
   const active = groups[filter as keyof typeof groups] ?? groups.All;
 

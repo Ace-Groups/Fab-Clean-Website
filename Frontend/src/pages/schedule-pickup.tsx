@@ -17,6 +17,7 @@ import { Button, Input, Textarea } from "@/components/ui";
 import { FormPanel } from "@/components/site";
 import { LocationInput } from "@/components/location-input";
 import { useToast } from "@/hooks/use-toast";
+import { DEFAULT_SERVICES, DEFAULT_STORES } from "@/lib/site-catalog";
 
 const pickupSchema = z.object({
   name: z.string().min(2, "Enter your name"),
@@ -101,6 +102,8 @@ export default function SchedulePickup() {
   const [step, setStep] = useState(1);
   const [success, setSuccess] = useState<{ ref: string; msg: string } | null>(null);
   const { data: servicesData } = useListServices();
+  const rawServices = ((Array.isArray(servicesData) ? (servicesData as any) : servicesData?.data) || []);
+  const availableServices = rawServices.length > 0 ? rawServices : DEFAULT_SERVICES;
   const { toast } = useToast();
 
   const getSmartTimeSlot = () => {
@@ -134,7 +137,7 @@ export default function SchedulePickup() {
     queryKey: ["stores"],
     queryFn: fetchStores,
   });
-  const storesData = storesResponse?.data || [];
+  const storesData = (storesResponse?.data && storesResponse.data.length > 0) ? storesResponse.data : DEFAULT_STORES;
 
   const handleLocationDetected = (lat: number, lon: number) => {
     if (!storesData.length) return;
@@ -320,7 +323,7 @@ export default function SchedulePickup() {
                       control={control}
                       render={({ field }) => (
                         <div className="grid gap-4 grid-cols-2 sm:grid-cols-3">
-                          {servicesData?.data?.map((service) => {
+                          {availableServices.map((service: any) => {
                             const selected = field.value.includes(service.id);
                             
                             // Map service names to icons dynamically
