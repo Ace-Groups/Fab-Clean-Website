@@ -126,10 +126,17 @@ export default function TrackOrder() {
                 <div className="mt-8">
                   <StatusTimeline
                     activeIndex={activeIndex}
-                    steps={stageLabels.map((label, index) => ({
-                      label,
-                      meta: `Stage ${index + 1}`,
-                    }))}
+                    steps={
+                      order.stages && order.stages.length > 0
+                        ? order.stages.map((stage, index) => ({
+                            label: stage.label,
+                            meta: `Stage ${index + 1}`,
+                          }))
+                        : stageLabels.map((label, index) => ({
+                            label,
+                            meta: `Stage ${index + 1}`,
+                          }))
+                    }
                   />
                 </div>
               </Card>
@@ -142,7 +149,7 @@ export default function TrackOrder() {
                       { label: "Customer", value: order.customerName || "Fab Clean Customer" },
                       { label: "Total", value: formatCurrency(order.totalAmount || 0) },
                       { label: "Payment", value: order.paymentStatus || "pending" },
-                      { label: "Pickup date", value: order.scheduledDate ? new Date(order.scheduledDate).toLocaleDateString("en-IN") : "Awaiting schedule" },
+                      { label: "Pickup date", value: order.scheduledDate ? (isNaN(new Date(order.scheduledDate).getTime()) ? order.scheduledDate : new Date(order.scheduledDate).toLocaleDateString("en-IN")) : "Awaiting schedule" },
                     ].map((item) => (
                       <div key={item.label} className="rounded-[1.4rem] border border-line bg-background/70 px-5 py-5">
                         <p className="text-sm uppercase tracking-[0.16em] text-muted-foreground">{item.label}</p>
