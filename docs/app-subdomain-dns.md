@@ -1,42 +1,42 @@
-# app.myfabclean.com — customer portal
+# app.myfabclean.com — customer portal (Fab Clean Cloudflare)
 
-Same Firebase Hosting site as marketing; hostname switches to the **AppShell** (bottom nav: Home · Book · Orders · Profile).
+Same Firebase Hosting site as marketing; hostname switches to the **AppShell**.
 
 | Host | Role |
 |------|------|
 | `myfabclean.com` | Marketing |
-| `app.myfabclean.com` | Customer web app / portal |
+| `app.myfabclean.com` | Customer portal |
 | `api.myfabclean.com` | Cloud Run API |
 
-## 1. Firebase (Mac)
+**DNS authority today:** Cloudflare (`bradley.ns` / `chloe.ns`) — zone lives in the **Fab Clean** Cloudflare account (not Ace-Digital). Apex already points at Firebase (`hosting-site=fab-clean-website`).
 
-```bash
-firebase hosting:sites:list --project fab-clean-env-1234
-# Add custom domain on site fab-clean-website:
-# Firebase Console → Hosting → Add custom domain → app.myfabclean.com
-# Copy the A/AAAA or CNAME records Firebase shows.
-```
+## Mac — Fab Clean Cloudflare (do this)
 
-## 2. Cloudflare DNS (zone for myfabclean.com)
+### A. Firebase first
+1. [Firebase Console](https://console.firebase.google.com/project/fab-clean-env-1234/hosting) → site **fab-clean-website**
+2. **Add custom domain** → `app.myfabclean.com`
+3. Copy the records Firebase shows (usually a **CNAME** to `fab-clean-website.web.app` or similar)
 
-If DNS is in Cloudflare (Fab Clean / Ace-Digital account):
+### B. Fab Clean Cloudflare DNS
+1. Log into **Fab Clean** Cloudflare (the account that owns `myfabclean.com`)
+2. **DNS → Records → Add record**
 
 | Type | Name | Target | Proxy |
 |------|------|--------|-------|
-| CNAME | `app` | `fab-clean-website.web.app` **or** the exact target Firebase shows | DNS only until SSL verifies, then Proxied OK with Full (strict) |
+| CNAME | `app` | Firebase target (e.g. `fab-clean-website.web.app`) | **DNS only** until SSL verifies, then Proxied + SSL **Full (strict)** |
 
-Also ensure API CORS includes `https://app.myfabclean.com` (shipped in code defaults).
+3. Wait for Firebase domain status → Connected
 
-## 3. Deploy
-
+### C. Deploy code
 ```bash
-git pull
+git pull origin main
 ./scripts/deploy-firebase-hosting.sh
-./scripts/deploy-cloud-run.sh   # picks up CORS default
+./scripts/deploy-cloud-run.sh   # CORS includes app.myfabclean.com
 ```
 
-## Smoke
+## Agent / MCP note
+Cursor Cloudflare MCP is currently authorized as **Ace-Digital** (`admin@acedigital.cc`) only — it cannot see or edit the Fab Clean `myfabclean.com` zone. To automate DNS: reconnect Cloudflare MCP with the **Fab Clean** account, then ask the agent to add the `app` CNAME.
 
-1. https://app.myfabclean.com → redirects to `/login` or `/dashboard`
-2. https://myfabclean.com → Sign in → opens app subdomain login
-3. Bottom tabs work on phone-width viewport
+## Smoke
+1. https://app.myfabclean.com → `/login` or `/dashboard`
+2. https://myfabclean.com Sign in → app subdomain
