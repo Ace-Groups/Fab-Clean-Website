@@ -35,11 +35,29 @@ async function main() {
         "slug", "name", "address", "phone", "email", "latitude", "longitude", "coverage_radius_km", "map_href", "sort_order", "is_active"
       ) VALUES 
       (
-        'pollachi', 'Pollachi Flagship', '#16, Venkatramana Round Road, Opposite Naturals Salon / HDFC Bank, Mahalingapuram, Pollachi - 642002', '93630 59595', 'info@myfabclean.in', 10.6559, 77.0090, 3.0, 'https://www.google.com/maps/search/?api=1&query=16%20Venkatramana%20Round%20Road%20Pollachi%20642002', 0, true
+        'pollachi', 'Fab Clean - Pollachi', 'No 16, Venketaramana Round Road, opp. to HDFC Bank, Pollachi, Tamil Nadu 642002', '93630 59595', 'pollachi@myfabclean.com', 10.667749, 77.011954, 10.0, 'https://maps.app.goo.gl/hGJHdkEraCXsbsgD6', 1, true
       ),
       (
-        'kinathukadavu', 'Kinathukadavu Branch', '#442/11, Opposite MLA Office, Krishnasamypuram, Kinathukadavu - 642109', '93637 19595', 'myfabclean@gmail.com', 10.8219, 77.0210, 3.0, 'https://www.google.com/maps/search/?api=1&query=442%2F11%20Krishnasamypuram%20Kinathukadavu%20642109', 1, true
-      ) ON CONFLICT DO NOTHING;
+        'suleeshwaranpatti', 'Fab Clean - Suleeshwaranpatti', '162, Kottur Road, opp. to Makkal Marundhagam, near to Nandhini Mahal, Suleshwaranpatti, Pollachi, Tamil Nadu 642006', '93630 59595', 'suleeshwaranpatti@myfabclean.com', 10.639843, 77.007228, 9.0, 'https://maps.app.goo.gl/c5dGSpTPJnEvTGHNA', 2, true
+      ),
+      (
+        'udumalpet', 'Fab Clean - Udumalaipettai', 'First floor, No 79/7, Main Rd, opp. to Indian Bank, Aishwarya Nagar, Gandhi Nagar, Udumalaipettai Municipality, Tamil Nadu 642154', '93630 59595', 'udumalpet@myfabclean.com', 10.583861, 77.254672, 10.0, 'https://maps.app.goo.gl/7Qpf2upZUZCaUSsz7', 3, true
+      ),
+      (
+        'kinathukadavu', 'Fab Clean - Kenathukadavu', 'Krishnasamy puram, Vadaputhur, Tamil Nadu 642109', '93637 19595', 'kinathukadavu@myfabclean.com', 10.823342, 77.017809, 8.0, 'https://maps.app.goo.gl/GAqSWZrc1LtBHUb9A', 4, true
+      )
+      ON CONFLICT (slug) DO UPDATE SET
+        name = EXCLUDED.name,
+        address = EXCLUDED.address,
+        phone = EXCLUDED.phone,
+        email = EXCLUDED.email,
+        latitude = EXCLUDED.latitude,
+        longitude = EXCLUDED.longitude,
+        coverage_radius_km = EXCLUDED.coverage_radius_km,
+        map_href = EXCLUDED.map_href,
+        sort_order = EXCLUDED.sort_order,
+        is_active = EXCLUDED.is_active,
+        updated_at = now();
     `);
     console.log("Stores table created and seeded successfully.");
   } catch (error) {

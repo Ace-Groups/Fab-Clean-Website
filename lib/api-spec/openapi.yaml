@@ -501,7 +501,7 @@ components:
           enum: [morning, afternoon, evening]
         branch:
           type: string
-          enum: [pollachi, kinathukadavu]
+          enum: [pollachi, suleeshwaranpatti, udumalpet, kinathukadavu]
       required:
         - name
         - phone

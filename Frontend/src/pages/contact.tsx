@@ -1,4 +1,3 @@
-import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -9,7 +8,7 @@ import { SEO } from "@/components/seo";
 import { Button, FadeIn, Input, SectionHeading, Textarea } from "@/components/ui";
 import { ActionList, SupportBand } from "@/components/site";
 import { BRAND } from "@/lib/brand";
-import { fetchStores, type Store } from "@/lib/public-api";
+import { useNearestStore } from "@/hooks/use-nearest-store";
 import { useToast } from "@/hooks/use-toast";
 
 const contactSchema = z.object({
@@ -23,16 +22,8 @@ const contactSchema = z.object({
 type ContactForm = z.infer<typeof contactSchema>;
 
 export default function Contact() {
-  const [stores, setStores] = useState<Store[]>([]);
+  const { storesNearestFirst, nearestStore } = useNearestStore({ requestOnMount: true });
   const { toast } = useToast();
-
-  useEffect(() => {
-    void fetchStores()
-      .then((res) => {
-        if (res.success) setStores(res.data);
-      })
-      .catch(() => setStores([]));
-  }, []);
 
   const { mutate: submitForm, isPending } = useSubmitContact({
     mutation: {
@@ -136,9 +127,14 @@ export default function Contact() {
                 <div className="visual-card p-7">
                   <p className="eyebrow">Branch coverage</p>
                   <div className="mt-6 space-y-5">
-                    {stores.map((branch) => (
+                    {storesNearestFirst.map((branch) => (
                       <div key={branch.slug} className="rounded-[1.5rem] border border-line bg-background/70 px-5 py-5">
-                        <p className="font-medium text-ink">{branch.name}</p>
+                        <p className="font-medium text-ink">
+                          {branch.name}
+                          {branch.slug === nearestStore?.slug ? (
+                            <span className="ml-2 text-xs font-normal text-primary">(nearest to you)</span>
+                          ) : null}
+                        </p>
                         <p className="mt-2 text-sm leading-7 text-muted-foreground">{branch.address}</p>
                       </div>
                     ))}

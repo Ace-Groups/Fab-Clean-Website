@@ -1,12 +1,10 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { fetchStores } from "@/lib/public-api";
-import { CalendarIcon, CheckCircle2, ChevronLeft, ChevronRight } from "lucide-react";
+import { CalendarIcon, CheckCircle2, ChevronLeft, ChevronRight, MapPin, Navigation } from "lucide-react";
 import { format } from "date-fns";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
@@ -18,6 +16,16 @@ import { LocationInput } from "@/components/location-input";
 import { useToast } from "@/hooks/use-toast";
 import { DEFAULT_STORES } from "@/lib/site-catalog";
 import { BRAND, DEFAULT_PICKUP_SERVICE } from "@/lib/brand";
+import { findNearestStore } from "@/lib/geo";
+import { useNearestStore } from "@/hooks/use-nearest-store";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const pickupSchema = z.object({
   name: z.string().min(2, "Enter your name"),
@@ -102,6 +110,18 @@ export default function SchedulePickup() {
   const [success, setSuccess] = useState<{ ref: string; msg: string } | null>(null);
   const { toast } = useToast();
   const [savedAddresses, setSavedAddresses] = useState<string[]>([]);
+  const branchManualOverride = useRef(false);
+  const [autoBranchSlug, setAutoBranchSlug] = useState<string | null>(null);
+  const [showGeoPrompt, setShowGeoPrompt] = useState(false);
+  const geoPromptDismissed = useRef(false);
+
+  const {
+    stores: storesData,
+    persistCoords,
+    requestBrowserLocation,
+    isLocating,
+    visitorGeo,
+  } = useNearestStore({ requestOnMount: true });
 
   const getSmartTimeSlot = () => {
     const hour = new Date().getHours();
@@ -127,45 +147,60 @@ export default function SchedulePickup() {
     },
   });
 
-  const { data: storesResponse } = useQuery({
-    queryKey: ["stores"],
-    queryFn: fetchStores,
-  });
-  const storesData =
-    storesResponse?.data && storesResponse.data.length > 0 ? storesResponse.data : DEFAULT_STORES;
+  const applyNearestBranch = useCallback(
+    (lat: number, lon: number, opts?: { force?: boolean }) => {
+      const list = storesData.length ? storesData : DEFAULT_STORES;
+      const nearest = findNearestStore(list, lat, lon);
+      if (!nearest) return;
+      setAutoBranchSlug(nearest.slug);
+      if (!branchManualOverride.current || opts?.force) {
+        setValue("branch", nearest.slug, { shouldValidate: true });
+      }
+    },
+    [setValue, storesData],
+  );
 
   const handleLocationDetected = (lat: number, lon: number) => {
-    if (!storesData.length) return;
-
-    let nearest = storesData[0];
-    let minDistance = Infinity;
-
-    const getDist = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-      const R = 6371;
-      const dLat = ((lat2 - lat1) * Math.PI) / 180;
-      const dLon = ((lon2 - lon1) * Math.PI) / 180;
-      const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos((lat1 * Math.PI) / 180) *
-          Math.cos((lat2 * Math.PI) / 180) *
-          Math.sin(dLon / 2) *
-          Math.sin(dLon / 2);
-      return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
-    };
-
-    for (const store of storesData) {
-      const d = getDist(lat, lon, store.latitude, store.longitude);
-      if (d < minDistance) {
-        minDistance = d;
-        nearest = store;
-      }
-    }
-
-    setValue("branch", nearest.slug, { shouldValidate: true });
+    persistCoords(lat, lon, "address");
+    applyNearestBranch(lat, lon);
   };
 
   const values = watch();
   const phoneVal = watch("phone");
+  const addressVal = watch("address");
+
+  useEffect(() => {
+    if (visitorGeo && !branchManualOverride.current) {
+      applyNearestBranch(visitorGeo.lat, visitorGeo.lng);
+    }
+  }, [visitorGeo, applyNearestBranch]);
+
+  useEffect(() => {
+    if (visitorGeo || geoPromptDismissed.current) return;
+    const timer = window.setTimeout(() => setShowGeoPrompt(true), 600);
+    return () => window.clearTimeout(timer);
+  }, [visitorGeo]);
+
+  useEffect(() => {
+    if (!addressVal || addressVal.length < 12) return;
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressVal)}&countrycodes=in&limit=1`,
+        );
+        if (!response.ok) return;
+        const data = (await response.json()) as Array<{ lat: string; lon: string }>;
+        if (!data[0]?.lat || !data[0]?.lon) return;
+        const lat = parseFloat(data[0].lat);
+        const lon = parseFloat(data[0].lon);
+        persistCoords(lat, lon, "address");
+        applyNearestBranch(lat, lon);
+      } catch {
+        /* optional refinement */
+      }
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [addressVal, applyNearestBranch, persistCoords]);
 
   useEffect(() => {
     if (phoneVal?.length === 10) {
@@ -203,7 +238,31 @@ export default function SchedulePickup() {
 
   const nextStep = async () => {
     const ok = await trigger(["name", "phone", "address"]);
-    if (ok) setStep(2);
+    if (!ok) return;
+
+    const geo = visitorGeo;
+    if (geo) {
+      applyNearestBranch(geo.lat, geo.lng);
+    } else if (addressVal && addressVal.length >= 12) {
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressVal)}&countrycodes=in&limit=1`,
+        );
+        if (response.ok) {
+          const data = (await response.json()) as Array<{ lat: string; lon: string }>;
+          if (data[0]?.lat && data[0]?.lon) {
+            const lat = parseFloat(data[0].lat);
+            const lon = parseFloat(data[0].lon);
+            persistCoords(lat, lon, "address");
+            applyNearestBranch(lat, lon);
+          }
+        }
+      } catch {
+        /* fall through */
+      }
+    }
+
+    setStep(2);
   };
 
   const onSubmit = (formValues: PickupForm) => {
@@ -282,6 +341,52 @@ export default function SchedulePickup() {
             </div>
 
             <div className="plane-step overflow-hidden p-6 sm:p-8">
+              <Dialog
+                open={showGeoPrompt}
+                onOpenChange={(open) => {
+                  setShowGeoPrompt(open);
+                  if (!open) geoPromptDismissed.current = true;
+                }}
+              >
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <Navigation className="h-5 w-5 text-primary" />
+                      Find your nearest branch
+                    </DialogTitle>
+                    <DialogDescription className="pt-2 text-base">
+                      Allow location once so we can pre-select the closest Fab Clean branch for pickup. You can change
+                      it on the next step.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter className="mt-4 flex gap-3 sm:justify-start">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        geoPromptDismissed.current = true;
+                        setShowGeoPrompt(false);
+                      }}
+                    >
+                      Not now
+                    </Button>
+                    <Button
+                      type="button"
+                      isLoading={isLocating}
+                      onClick={() => {
+                        void requestBrowserLocation().then((geo) => {
+                          if (geo) applyNearestBranch(geo.lat, geo.lng);
+                          geoPromptDismissed.current = true;
+                          setShowGeoPrompt(false);
+                        });
+                      }}
+                    >
+                      Use my location
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
               <form onSubmit={handleSubmit(onSubmit)}>
                 <AnimatePresence mode="wait">
                   {step === 1 ? (
@@ -375,18 +480,31 @@ export default function SchedulePickup() {
 
                       <div>
                         <label className="mb-2 block text-sm font-medium text-ink">Branch</label>
+                        {autoBranchSlug && values.branch === autoBranchSlug ? (
+                          <p className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+                            <MapPin className="h-3.5 w-3.5 text-primary" />
+                            Nearest branch:{" "}
+                            <span className="font-medium text-ink">
+                              {storesData.find((s) => s.slug === autoBranchSlug)?.name ??
+                                DEFAULT_STORES.find((s) => s.slug === autoBranchSlug)?.name}
+                            </span>
+                          </p>
+                        ) : null}
                         <Controller
                           name="branch"
                           control={control}
                           render={({ field }) => (
                             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                              {storesData.map((store) => (
+                              {(storesData.length ? storesData : DEFAULT_STORES).map((store) => (
                                 <button
                                   key={store.slug}
                                   type="button"
-                                  onClick={() => field.onChange(store.slug)}
+                                  onClick={() => {
+                                    branchManualOverride.current = true;
+                                    field.onChange(store.slug);
+                                  }}
                                   className={cn(
-                                    "rounded-2xl border px-4 py-3 text-sm capitalize transition-all",
+                                    "rounded-2xl border px-4 py-3 text-left text-sm transition-all",
                                     field.value === store.slug
                                       ? "border-primary bg-primary/10 font-semibold text-primary"
                                       : "border-line bg-background/70 text-ink hover:border-primary/40",
