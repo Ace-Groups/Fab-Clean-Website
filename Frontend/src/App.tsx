@@ -15,6 +15,7 @@ const About = lazy(() => import("@/pages/about"));
 const Contact = lazy(() => import("@/pages/contact"));
 const Login = lazy(() => import("@/pages/login"));
 const Register = lazy(() => import("@/pages/register"));
+const Welcome = lazy(() => import("@/pages/welcome"));
 const SchedulePickup = lazy(() => import("@/pages/schedule-pickup"));
 const BookNow = lazy(() => import("@/pages/book-now"));
 const Dashboard = lazy(() => import("@/pages/dashboard/index"));
@@ -56,6 +57,7 @@ function Router() {
         <Route path="/about" component={About} />
         <Route path="/contact" component={Contact} />
         <Route path="/login" component={Login} />
+        <Route path="/welcome" component={Welcome} />
         <Route path="/register" component={Register} />
         <Route path="/schedule-pickup" component={SchedulePickup} />
         <Route path="/book_now" component={BookNow} />

@@ -52,3 +52,31 @@ export async function fetchPortalPickups(token: string, since?: string) {
   const suffix = since ? `?since=${encodeURIComponent(since)}` : "";
   return request<{ success: boolean; data: PortalPickup[]; meta: { total: number } }>(`/api/pickups${suffix}`, token);
 }
+
+export type PortalProfile = {
+  id: string;
+  phone: string;
+  name?: string;
+  email?: string;
+  avatarUrl?: string;
+  addresses?: string[];
+  createdAt?: string;
+};
+
+export type PortalProfilePatch = {
+  name?: string;
+  email?: string;
+  avatarUrl?: string;
+  addresses?: string[];
+};
+
+export async function fetchPortalProfile(token: string) {
+  return request<{ success: boolean; data: PortalProfile }>("/api/users/profile", token);
+}
+
+export async function patchPortalProfile(token: string, data: PortalProfilePatch) {
+  return request<{ success: boolean; data: PortalProfile }>("/api/users/profile", token, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
