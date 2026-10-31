@@ -1,246 +1,197 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { AnimatePresence, motion } from "framer-motion";
-import { ArrowRight, RefreshCw } from "lucide-react";
-import { useSendOtp, useVerifyOtp } from "@workspace/api-client-react";
+import { motion } from "framer-motion";
+import { AppLayout } from "@/components/layout";
 import { Button, Input } from "@/components/ui";
+import { BrandLogo } from "@/components/brand-logo";
+import { SEO } from "@/components/seo";
 import { BRAND } from "@/lib/brand";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "@/hooks/use-toast";
-import { SEO } from "@/components/seo";
+import { getApiBaseUrl } from "@/lib/api-base";
+import {
+  ensureMsg91WidgetScript,
+  extractWidgetAccessToken,
+  fetchMsg91WidgetConfig,
+} from "@/lib/msg91-widget";
 
 export default function Login() {
   const [location, setLocation] = useLocation();
   const { isAuthenticated, setToken } = useAuth();
-  const [step, setStep] = useState<"phone" | "otp">("phone");
   const [phone, setPhone] = useState("");
-  const [otp, setOtp] = useState("");
-  const [resendTimer, setResendTimer] = useState(0);
-
-  // Helper to get OTP state from storage
-  const getOtpState = (phoneNum: string) => {
-    const saved = localStorage.getItem(`otp_state_${phoneNum}`);
-    if (!saved) return { attempts: 0, lastSentAt: 0, lockedUntil: 0 };
-    return JSON.parse(saved);
-  };
-
-  // Helper to save OTP state
-  const saveOtpState = (phoneNum: string, state: any) => {
-    localStorage.setItem(`otp_state_${phoneNum}`, JSON.stringify(state));
-  };
+  const [isBooting, setIsBooting] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const widgetStarted = useRef(false);
 
   const redirectTarget = useMemo(() => {
     const params = new URLSearchParams(location.split("?")[1] || "");
     return params.get("redirect") || "/dashboard/orders";
   }, [location]);
 
-  const sendOtp = useSendOtp({
-    mutation: {
-      onSuccess: () => {
-        setStep("otp");
-        const state = getOtpState(phone);
-        const newAttempts = state.attempts + 1;
-        
-        // Calculate cooldown: 30s, 60s, 90s...
-        let cooldown = newAttempts * 30;
-        let lockedUntil = 0;
-
-        if (newAttempts >= 5) {
-          cooldown = 600; // 10 minutes wait after 5 attempts
-          lockedUntil = Date.now() + 600 * 1000;
-        }
-
-        const newState = {
-          attempts: newAttempts,
-          lastSentAt: Date.now(),
-          lockedUntil
-        };
-
-        saveOtpState(phone, newState);
-        setResendTimer(cooldown);
-        
-        toast({ 
-          title: "WhatsApp Code Sent", 
-          description: "Please check your WhatsApp for the 4-digit code." 
-        });
-      },
-      onError: (error: any) => {
-        toast({
-          title: "Unable to send code",
-          description: error.response?.data?.error?.message || "Please try again.",
-          variant: "destructive",
-        });
-      },
-    },
-  });
-
-  const verifyOtp = useVerifyOtp({
-    mutation: {
-      onSuccess: (result) => {
-        // Clear OTP state on success
-        localStorage.removeItem(`otp_state_${phone}`);
-        setToken(result.data.accessToken);
-        toast({ title: "Signed in", description: "You are now logged in." });
-      },
-      onError: (error: any) => {
-        toast({
-          title: "Verification failed",
-          description: error.response?.data?.error?.message || "Please check the OTP and try again.",
-          variant: "destructive",
-        });
-      },
-    },
-  });
-
-  // Restore timer on refresh or phone change
   useEffect(() => {
-    if (!phone || phone.length !== 10) return;
-    
-    const state = getOtpState(phone);
-    if (!state.lastSentAt) return;
-
-    const newAttempts = state.attempts;
-    let cooldown = newAttempts * 30;
-    if (newAttempts >= 5) cooldown = 600;
-
-    const elapsed = Math.floor((Date.now() - state.lastSentAt) / 1000);
-    const remaining = Math.max(0, cooldown - elapsed);
-    
-    if (remaining > 0) {
-      setResendTimer(remaining);
-      if (step === "phone" && state.attempts > 0) {
-        setStep("otp"); // Resume to OTP step if recently sent
-      }
+    if (isAuthenticated) {
+      setLocation(redirectTarget);
     }
-  }, [phone]);
-
-  useEffect(() => {
-    if (isAuthenticated) setLocation(redirectTarget);
   }, [isAuthenticated, redirectTarget, setLocation]);
 
-  useEffect(() => {
-    if (!resendTimer) return;
-    const timer = window.setTimeout(() => setResendTimer((value) => value - 1), 1000);
-    return () => window.clearTimeout(timer);
-  }, [resendTimer]);
-
-  const requestOtp = () => {
-    if (phone.length !== 10) {
-      toast({ title: "Enter a valid phone number", description: "Use a 10-digit mobile number.", variant: "destructive" });
-      return;
+  async function completeWithAccessToken(accessToken: string, phoneDigits: string) {
+    setIsVerifying(true);
+    try {
+      const base = getApiBaseUrl();
+      const response = await fetch(`${base}/api/auth/verify-widget`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          accessToken,
+          "access-token": accessToken,
+          phone: phoneDigits,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body?.error?.message || "Verification failed");
+      }
+      const token = body?.data?.accessToken || body?.accessToken || body?.token;
+      if (!token) throw new Error("No session token returned");
+      setToken(token);
+      toast({ title: "Signed in", description: "Welcome back to Fab Clean." });
+      setLocation(redirectTarget);
+    } catch (error) {
+      toast({
+        title: "Sign-in failed",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsVerifying(false);
+      widgetStarted.current = false;
     }
+  }
 
-    const state = getOtpState(phone);
-    if (state.lockedUntil && Date.now() < state.lockedUntil) {
-      const waitMins = Math.ceil((state.lockedUntil - Date.now()) / 60000);
-      toast({ 
-        title: "Account temporarily locked", 
-        description: `Too many resend attempts. Please wait ${waitMins} minutes.`, 
-        variant: "destructive" 
+  async function startOtpWidget() {
+    const digits = phone.replace(/\D/g, "").slice(-10);
+    if (digits.length !== 10) {
+      toast({
+        title: "Enter a valid phone",
+        description: "Use your 10-digit Indian mobile number.",
+        variant: "destructive",
       });
       return;
     }
+    if (widgetStarted.current) return;
+    widgetStarted.current = true;
+    setIsBooting(true);
 
-    sendOtp.mutate({ data: { phone } });
-  };
+    try {
+      const config = await fetchMsg91WidgetConfig();
+      await ensureMsg91WidgetScript();
+      if (!window.initSendOTP) {
+        throw new Error("OTP widget failed to initialize");
+      }
+
+      window.initSendOTP({
+        widgetId: config.widgetId,
+        tokenAuth: config.tokenAuth,
+        identifier: `91${digits}`,
+        exposeMethods: true,
+        success: (data: unknown) => {
+          const accessToken = extractWidgetAccessToken(data);
+          if (!accessToken) {
+            toast({
+              title: "OTP incomplete",
+              description: "No verification token received. Please try again.",
+              variant: "destructive",
+            });
+            widgetStarted.current = false;
+            return;
+          }
+          void completeWithAccessToken(accessToken, digits);
+        },
+        failure: (error: unknown) => {
+          widgetStarted.current = false;
+          const message =
+            typeof error === "string"
+              ? error
+              : error && typeof error === "object" && "message" in error
+                ? String((error as { message: unknown }).message)
+                : "OTP verification was cancelled or failed.";
+          toast({ title: "OTP failed", description: message, variant: "destructive" });
+        },
+      });
+    } catch (error) {
+      widgetStarted.current = false;
+      toast({
+        title: "Unable to open OTP",
+        description: error instanceof Error ? error.message : "Please try again shortly.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsBooting(false);
+    }
+  }
 
   return (
-    <>
+    <AppLayout>
       <SEO
-        title="Login | Fab Clean"
-        description="Sign in to the Fab Clean customer portal with WhatsApp OTP."
+        title="Sign in | Fab Clean"
+        description="Sign in with your phone number using a one-time code to track orders and open your portal."
         canonical="https://myfabclean.com/login"
       />
-      <div className="site-frame min-h-screen px-4 py-6 sm:px-6">
-        <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md items-center">
-          <div className="w-full">
-            <div className="visual-card p-8 lg:p-10">
-              <div className="flex justify-center mb-10">
-                <Link href="/" className="inline-flex items-center gap-3">
-                  <img src={`${import.meta.env.BASE_URL}logo.webp`} alt="Fab Clean" className="h-10 w-auto" />
-                </Link>
-              </div>
 
-              <p className="eyebrow text-center">Customer portal</p>
-              <AnimatePresence mode="wait">
-                {step === "phone" ? (
-                  <motion.div key="phone" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} className="text-center">
-                    <h2 className="mt-4 font-display text-3xl text-ink">Sign in</h2>
-                    <p className="mt-3 text-sm leading-7 text-muted-foreground">
-                      We will send a one-time code to your <span className="font-medium text-primary">WhatsApp</span>.
-                    </p>
-                    <form
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        requestOtp();
-                      }}
-                      className="mt-8 space-y-5"
-                    >
-                      <div className="relative text-left">
-                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">+91</span>
-                        <Input
-                          value={phone}
-                          onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 10))}
-                          placeholder="10-digit number"
-                          className="pl-14 text-center"
-                        />
-                      </div>
-                      <Button type="submit" className="w-full" size="lg" isLoading={sendOtp.isPending}>
-                        Send OTP
-                        <ArrowRight className="h-4 w-4" />
-                      </Button>
-                    </form>
-                  </motion.div>
-                ) : (
-                  <motion.div key="otp" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} className="text-center">
-                    <button type="button" onClick={() => setStep("phone")} className="text-sm font-medium text-primary">
-                      Change number
-                    </button>
-                    <h2 className="mt-4 font-display text-3xl text-ink">Enter code</h2>
-                    <p className="mt-3 text-sm leading-7 text-muted-foreground">
-                      We sent a 4-digit code to your <span className="font-medium text-ink">WhatsApp</span> at <span className="font-medium text-ink">+91 {phone}</span>.
-                    </p>
-                    <form
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        if (otp.length !== 4) {
-                          toast({ title: "Enter the 4-digit OTP", variant: "destructive" });
-                          return;
-                        }
-                        verifyOtp.mutate({ data: { phone, otp } });
-                      }}
-                      className="mt-8 space-y-5"
-                    >
-                      <Input
-                        value={otp}
-                        onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 4))}
-                        placeholder="4-digit code"
-                        className="text-center text-lg tracking-[0.28em]"
-                      />
-                      <Button type="submit" className="w-full" size="lg" isLoading={verifyOtp.isPending}>Verify and sign in</Button>
-                    </form>
-                    <div className="mt-6 flex flex-col items-center gap-3">
-                      <p className="text-sm text-muted-foreground">
-                        {resendTimer 
-                          ? `Resend available in ${Math.floor(resendTimer / 60)}m ${resendTimer % 60}s` 
-                          : "Need a new code?"}
-                      </p>
-                      <Button type="button" variant="ghost" size="sm" disabled={resendTimer > 0 || sendOtp.isPending} onClick={requestOtp}>
-                        <RefreshCw className="h-4 w-4" />
-                        Resend OTP
-                      </Button>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              <p className="mt-10 text-center text-sm leading-7 text-muted-foreground">
-                New to {BRAND.name}? We'll create your account automatically.
+      <div className="page-shell">
+        <section className="container-tight section-padding">
+          <motion.div
+            initial={{ opacity: 0, y: 18 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+            className="mx-auto max-w-md plane-step p-8 sm:p-10"
+          >
+            <div className="flex flex-col items-center text-center">
+              <BrandLogo imgClassName="h-12 w-auto" />
+              <h1 className="mt-6 font-display text-3xl text-ink sm:text-4xl">Sign in with your phone</h1>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                No password. We send a one-time code through MSG91 so you can track orders and open your portal.
               </p>
             </div>
-          </div>
-        </div>
+
+            <div className="mt-8 space-y-4">
+              <div>
+                <label className="mb-2 block text-sm font-medium text-ink" htmlFor="login-phone">
+                  Mobile number
+                </label>
+                <Input
+                  id="login-phone"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  maxLength={10}
+                  placeholder="10-digit mobile"
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 10))}
+                />
+              </div>
+              <Button
+                className="w-full"
+                size="lg"
+                isLoading={isBooting || isVerifying}
+                onClick={() => void startOtpWidget()}
+              >
+                Continue with OTP
+              </Button>
+              <p className="text-center text-xs leading-5 text-muted-foreground">
+                By continuing you agree to {BRAND.name} contacting you about this order on this number.
+              </p>
+            </div>
+
+            <p className="mt-8 text-center text-sm text-muted-foreground">
+              Need a pickup instead?{" "}
+              <Link href="/schedule-pickup" className="font-medium text-primary underline-offset-4 hover:underline">
+                Schedule pickup
+              </Link>
+            </p>
+          </motion.div>
+        </section>
       </div>
-    </>
+    </AppLayout>
   );
 }

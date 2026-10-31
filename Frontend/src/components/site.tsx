@@ -312,7 +312,7 @@ export function SupportBand({
       <div className="lux-dark-card overflow-hidden px-7 py-8 sm:px-10">
         <div className="grid gap-6 lg:grid-cols-[1fr_auto] lg:items-center">
           <div>
-            <p className="eyebrow text-primary-light">Support</p>
+            <p className="ticket-mark text-primary-light">Support</p>
             <h2 className="mt-4 font-display text-4xl text-white">{title}</h2>
             <p className="mt-4 max-w-2xl text-base leading-8 text-white/70">{description}</p>
           </div>

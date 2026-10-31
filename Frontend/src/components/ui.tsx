@@ -14,10 +14,10 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       "inline-flex items-center justify-center gap-2 rounded-full font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-55 active:scale-[0.98]";
 
     const variants: Record<NonNullable<ButtonProps["variant"]>, string> = {
-      primary: "bg-primary text-background shadow-[0_18px_36px_rgba(181,138,68,0.18)] hover:bg-primary/90",
+      primary: "bg-primary text-panel shadow-[0_16px_36px_rgba(47,122,116,0.28)] hover:bg-primary/90",
       secondary: "bg-primary-soft text-ink hover:bg-primary-soft/75",
-      outline: "border border-line bg-panel/80 text-ink hover:border-primary/35 hover:text-primary hover:bg-panel",
-      ghost: "bg-transparent text-ink hover:bg-primary/8 hover:text-primary",
+      outline: "border border-line bg-panel/80 text-ink hover:border-primary/40 hover:text-primary hover:bg-panel",
+      ghost: "bg-transparent text-ink hover:bg-primary/10 hover:text-primary",
       destructive: "bg-red-700 text-white hover:bg-red-800",
     };
 

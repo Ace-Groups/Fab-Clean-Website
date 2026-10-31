@@ -6,3 +6,8 @@ dist-build
 .env
 .DS_Store
 *.log
+
+.impeccable/review
+.impeccable/mocks
+.impeccable/build
+.impeccable/questions

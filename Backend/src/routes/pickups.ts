@@ -57,7 +57,11 @@ router.post("/pickups", async (req, res) => {
       branch,
     } = req.body;
 
-    if (!name || !phone || !address || !services?.length || !preferredDate || !timeSlot || !branch) {
+    const resolvedServices = Array.isArray(services) && services.length > 0
+      ? services
+      : ["Pickup — details at door"];
+
+    if (!name || !phone || !address || !preferredDate || !timeSlot || !branch) {
       res.status(400).json({
         success: false,
         error: { code: "VALIDATION_ERROR", message: "Missing required fields" },
@@ -96,12 +100,10 @@ router.post("/pickups", async (req, res) => {
           latitude: addressLat ?? null,
           longitude: addressLng ?? null,
         },
-        items: Array.isArray(services)
-          ? services.map((serviceName: string) => ({
+        items: resolvedServices.map((serviceName: string) => ({
               serviceName: String(serviceName),
               quantity: 1,
-            }))
-          : [],
+            })),
       });
     } catch (erpError) {
       req.log.error(erpError, "ERP booking creation failed, proceeding with local pickup record");
@@ -116,7 +118,7 @@ router.post("/pickups", async (req, res) => {
       address,
       addressLat: addressLat ?? null,
       addressLng: addressLng ?? null,
-      services,
+      services: resolvedServices,
       specialInstructions: specialInstructions ?? null,
       preferredDate,
       timeSlot,

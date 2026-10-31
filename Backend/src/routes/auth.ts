@@ -515,4 +515,196 @@ router.post("/auth/logout", (_req, res) => {
   res.json({ success: true, message: "Logged out successfully" });
 });
 
+/**
+ * Public widget config for MSG91 OTP widget.
+ * AuthKey never leaves the server — only widgetId + tokenAuth (widget public credentials).
+ */
+router.get("/auth/otp-widget-config", (_req, res) => {
+  const widgetId = process.env.MSG91_WIDGET_ID || process.env.VITE_MSG91_WIDGET_ID || "";
+  const tokenAuth =
+    process.env.MSG91_OTP_VERIFICATION_TOKEN ||
+    process.env.VITE_MSG91_TOKEN_AUTH ||
+    process.env.MSG91_TOKEN_AUTH ||
+    "";
+
+  if (!widgetId || !tokenAuth) {
+    res.status(503).json({
+      success: false,
+      error: { code: "NOT_CONFIGURED", message: "OTP widget is not configured" },
+    });
+    return;
+  }
+
+  res.json({
+    success: true,
+    data: { widgetId, tokenAuth },
+    widgetId,
+    tokenAuth,
+  });
+});
+
+/**
+ * Verify MSG91 widget access-token, then issue Fab Clean session JWTs.
+ */
+router.post("/auth/verify-widget", async (req, res) => {
+  const accessTokenRaw =
+    req.body?.accessToken ??
+    req.body?.["access-token"] ??
+    req.body?.token ??
+    req.body?.message;
+  const accessToken = typeof accessTokenRaw === "string" ? accessTokenRaw.trim() : "";
+  const phone = typeof req.body?.phone === "string" ? normalizePhone(req.body.phone) : "";
+
+  if (!accessToken) {
+    res.status(400).json({
+      success: false,
+      error: { code: "VALIDATION_ERROR", message: "Widget access token is required" },
+    });
+    return;
+  }
+
+  const authKey = process.env.MSG91_AUTH_KEY;
+  if (!authKey) {
+    res.status(500).json({
+      success: false,
+      error: { code: "SERVER_ERROR", message: "OTP service is not configured properly." },
+    });
+    return;
+  }
+
+  try {
+    const verifyResponse = await fetch("https://control.msg91.com/api/v5/widget/verifyAccessToken", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        authkey: authKey,
+      },
+      body: JSON.stringify({
+        authkey: authKey,
+        "access-token": accessToken,
+      }),
+    });
+
+    const verifyText = await verifyResponse.text();
+    let verifyJson: Record<string, unknown> = {};
+    try {
+      verifyJson = JSON.parse(verifyText) as Record<string, unknown>;
+    } catch {
+      verifyJson = {};
+    }
+
+    const verifyOk =
+      verifyResponse.ok &&
+      (verifyJson.type === "success" ||
+        verifyJson.message === "success" ||
+        verifyJson.status === "success" ||
+        Number(verifyJson.type) === 200 ||
+        verifyJson.hasOwnProperty("request_id") ||
+        String(verifyJson.type || "").toLowerCase() === "success");
+
+    // MSG91 returns various shapes; treat HTTP 200 with no explicit error as success.
+    const explicitError =
+      verifyJson.type === "error" ||
+      verifyJson.status === "error" ||
+      (typeof verifyJson.message === "string" && /invalid|fail|expire/i.test(verifyJson.message) && verifyJson.type !== "success");
+
+    if (!verifyResponse.ok || explicitError || (!verifyOk && verifyJson.type && verifyJson.type !== "success")) {
+      req.log.warn({ status: verifyResponse.status, body: verifyText.slice(0, 500) }, "MSG91 widget token verify failed");
+      res.status(401).json({
+        success: false,
+        error: { code: "INVALID_TOKEN", message: "OTP verification failed. Please try again." },
+      });
+      return;
+    }
+
+    // Prefer phone from client (normalized). Fallback to MSG91 payload if present.
+    const msg91PhoneRaw =
+      (verifyJson as { data?: { mobile?: string; phone?: string } }).data?.mobile ||
+      (verifyJson as { data?: { phone?: string } }).data?.phone ||
+      (verifyJson as { mobile?: string }).mobile ||
+      "";
+    const msg91Phone = typeof msg91PhoneRaw === "string" ? normalizePhone(msg91PhoneRaw.replace(/^91/, "")) : "";
+    const resolvedPhone = phone || msg91Phone;
+
+    if (!resolvedPhone) {
+      res.status(400).json({
+        success: false,
+        error: { code: "VALIDATION_ERROR", message: "Phone number is required after OTP verification" },
+      });
+      return;
+    }
+
+    let user = await db.query.usersTable.findFirst({
+      where: eq(usersTable.phone, resolvedPhone),
+    });
+
+    const isNewUser = !user;
+    let erpLinked = false;
+
+    if (!user) {
+      const erpCustomer = await db.query.erpCustomers.findFirst({
+        where: sql`normalize_phone_e164(${erpCustomers.phone}) = normalize_phone_e164(${resolvedPhone})`,
+      });
+
+      const [created] = await db
+        .insert(usersTable)
+        .values({
+          phone: resolvedPhone,
+          customerId: erpCustomer?.id || null,
+          name: erpCustomer?.name || null,
+          email: erpCustomer?.email || null,
+        })
+        .returning();
+      user = created;
+      erpLinked = Boolean(erpCustomer?.id);
+    } else if (!user.customerId) {
+      const erpCustomer = await db.query.erpCustomers.findFirst({
+        where: sql`normalize_phone_e164(${erpCustomers.phone}) = normalize_phone_e164(${resolvedPhone})`,
+      });
+      if (erpCustomer) {
+        await db.update(usersTable)
+          .set({
+            customerId: erpCustomer.id,
+            name: user.name || erpCustomer.name,
+            email: user.email || erpCustomer.email,
+          })
+          .where(eq(usersTable.id, user.id));
+        user.customerId = erpCustomer.id;
+        erpLinked = true;
+      }
+    } else {
+      erpLinked = true;
+    }
+
+    const accessJwt = issueAccessToken(user);
+    const refreshToken = issueRefreshToken(user.id);
+    setRefreshCookie(res, refreshToken);
+    const sessionUser = toSessionUser(user);
+
+    res.json({
+      success: true,
+      data: {
+        accessToken: accessJwt,
+        refreshToken,
+        token: accessJwt,
+        isNewUser,
+        erpLinked,
+        user: sessionUser,
+      },
+      accessToken: accessJwt,
+      refreshToken,
+      token: accessJwt,
+      isNewUser,
+      erpLinked,
+      user: sessionUser,
+    });
+  } catch (err) {
+    req.log.error(err, "Widget auth error");
+    res.status(500).json({
+      success: false,
+      error: { code: "INTERNAL_ERROR", message: "Authentication failed" },
+    });
+  }
+});
+
 export default router;
