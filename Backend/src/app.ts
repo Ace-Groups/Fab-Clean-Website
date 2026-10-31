@@ -8,6 +8,21 @@ import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 
+const DEFAULT_CORS_ORIGINS = [
+  "https://myfabclean.com",
+  "https://www.myfabclean.com",
+  "https://fab-clean-website.web.app",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+];
+
+function resolveCorsOrigins(): string[] {
+  const fromEnv = process.env.CORS_ORIGINS?.split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  return fromEnv?.length ? fromEnv : DEFAULT_CORS_ORIGINS;
+}
+
 const app: Express = express();
 
 // Trust the first proxy (Render load balancer) so rate limiting works per user IP
@@ -70,7 +85,20 @@ app.use(
     },
   }),
 );
-app.use(cors());
+const corsOrigins = resolveCorsOrigins();
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Same-origin or server-to-server (no Origin header)
+      if (!origin || corsOrigins.includes(origin)) {
+        callback(null, origin ?? corsOrigins[0]);
+        return;
+      }
+      callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    credentials: true,
+  }),
+);
 app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
