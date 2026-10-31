@@ -11,6 +11,7 @@ import rateLimit from "express-rate-limit";
 const DEFAULT_CORS_ORIGINS = [
   "https://myfabclean.com",
   "https://www.myfabclean.com",
+  "https://app.myfabclean.com",
   "https://fab-clean-website.web.app",
   "http://localhost:5173",
   "http://127.0.0.1:5173",

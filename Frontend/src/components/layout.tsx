@@ -8,7 +8,9 @@ import { useGetProfile } from "@workspace/api-client-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui";
 import { BrandLogo } from "@/components/brand-logo";
+import { AppShell } from "@/components/app-shell";
 import { useAuth } from "@/hooks/use-auth";
+import { appUrl, isCustomerAppHost } from "@/lib/site-hosts";
 
 function ProfileDropdown() {
   const [open, setOpen] = useState(false);
@@ -178,9 +180,9 @@ export function Navbar() {
             {isAuthenticated ? (
               <ProfileDropdown />
             ) : (
-              <Link href="/login" data-cursor-label="Login">
+              <a href={appUrl("/login")} data-cursor-label="Login">
                 <Button variant="ghost" size="sm">Sign in</Button>
-              </Link>
+              </a>
             )}
             <Link href="/schedule-pickup" data-cursor-label="Book">
               <Button size="sm">Schedule pickup</Button>
@@ -242,9 +244,9 @@ export function Navbar() {
                     </Button>
                   </div>
                 ) : (
-                  <Link href="/login">
+                  <a href={appUrl("/login")}>
                     <Button variant="ghost" className="w-full">Login</Button>
-                  </Link>
+                  </a>
                 )}
                 <Link href="/schedule-pickup">
                   <Button className="w-full">Schedule pickup</Button>
@@ -293,7 +295,7 @@ export function Footer() {
                 <Link key={item.path} href={item.path} className="hover:text-white">{item.name}</Link>
               ))}
               <Link href="/schedule-pickup" className="hover:text-white">Schedule Pickup</Link>
-              <Link href="/dashboard/orders" className="hover:text-white">Customer Portal</Link>
+              <a href={appUrl("/dashboard/orders")} className="hover:text-white">Customer Portal</a>
             </div>
           </div>
 
@@ -335,6 +337,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "auto" });
   }, [location]);
+
+  if (isCustomerAppHost()) {
+    return <AppShell>{children}</AppShell>;
+  }
 
   // FAB only after leaving marketing first-viewport pages that already carry the primary CTA.
   const showFAB =

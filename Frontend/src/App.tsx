@@ -6,6 +6,7 @@ import { AuthProvider } from "@/hooks/use-auth";
 import { lazy, Suspense, useEffect } from "react";
 import { PointerFeedbackProvider } from "@/components/site";
 import { trackPageView } from "@/lib/analytics";
+import { AppHostGate } from "@/components/app-host-gate";
 
 // Pages
 const Home = lazy(() => import("@/pages/home"));
@@ -50,6 +51,7 @@ function Router() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-background" />}>
       <AnalyticsListener />
+      <AppHostGate />
       <Switch>
         <Route path="/" component={Home} />
         <Route path="/services" component={Services} />
