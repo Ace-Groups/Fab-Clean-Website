@@ -90,7 +90,7 @@ export async function fetchMsg91WidgetConfig(): Promise<Msg91WidgetConfig> {
 
   const { getApiBaseUrl } = await import("./api-base");
   const response = await fetch(`${getApiBaseUrl()}/api/auth/otp-widget-config`, {
-    credentials: "include",
+    credentials: "omit",
   });
   if (!response.ok) {
     throw new Error("OTP widget is not configured");
