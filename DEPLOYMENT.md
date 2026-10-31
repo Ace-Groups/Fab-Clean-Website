@@ -6,7 +6,7 @@ Monorepo: React (Firebase Hosting) + Express API (**GCP Cloud Run** primary; Ren
 
 - Node.js 22+, pnpm 10+
 - Firebase CLI (`npm i -g firebase-tools`) authenticated to `fab-clean-env-1234`
-- `gcloud` authenticated to project `254040893134` (Cloud Run / Artifact Registry / Cloud Build)
+- `gcloud` authenticated to project **`fab-clean-env-1234`** (project number `254040893134`; use the **ID** for `gcloud`, not the number)
 - Docker optional (Cloud Build can build the image)
 
 ## Setup
@@ -42,9 +42,11 @@ chmod +x scripts/deploy-cloud-run.sh
 Or manually:
 
 ```bash
-gcloud builds submit . --tag gcr.io/254040893134/fab-clean-api:$(git rev-parse --short HEAD)
+gcloud builds submit . --project fab-clean-env-1234 \
+  --tag gcr.io/fab-clean-env-1234/fab-clean-api:$(git rev-parse --short HEAD)
 gcloud run deploy fab-clean-api \
-  --image gcr.io/254040893134/fab-clean-api:$(git rev-parse --short HEAD) \
+  --project fab-clean-env-1234 \
+  --image gcr.io/fab-clean-env-1234/fab-clean-api:$(git rev-parse --short HEAD) \
   --region us-central1 \
   --platform managed \
   --allow-unauthenticated \
