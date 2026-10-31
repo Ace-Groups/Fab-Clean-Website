@@ -183,7 +183,7 @@ export async function lookupCustomer(phone: string): Promise<CustomerLookupResul
 
   try {
     const res = await request<{ success: boolean; data: CustomerLookupResult }>(
-      `/pickups/customer-lookup?phone=${encodeURIComponent(cleanPhone)}`
+      `/customer-lookup?phone=${encodeURIComponent(cleanPhone)}`,
     );
     if (res?.success && res.data) {
       return res.data;

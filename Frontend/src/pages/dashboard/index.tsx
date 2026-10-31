@@ -19,9 +19,15 @@ import {
   X,
 } from "lucide-react";
 import { AppLayout } from "@/components/layout";
+import { StructuredAddressFields } from "@/components/structured-address-fields";
 import { useAuth, useRequireAuth } from "@/hooks/use-auth";
 import { Badge, Button, Card, FadeIn, Input, SectionHeading } from "@/components/ui";
 import { StatusTimeline } from "@/components/site";
+import {
+  EMPTY_STRUCTURED_ADDRESS,
+  formatStructuredAddress,
+  isStructuredAddressComplete,
+} from "@/lib/address";
 import { fetchPortalPickups, fetchWalletSummary, type PortalPickup } from "@/lib/portal-api";
 
 type ProfileFormValues = {
@@ -456,7 +462,8 @@ function ProfilePanel() {
     },
   });
 
-  const [newAddress, setNewAddress] = useState("");
+  const [draftAddress, setDraftAddress] = useState({ ...EMPTY_STRUCTURED_ADDRESS });
+  const [showAddressErrors, setShowAddressErrors] = useState(false);
   const addresses = form.watch("addresses") || [];
 
   useEffect(() => {
@@ -476,10 +483,13 @@ function ProfilePanel() {
   });
 
   const addAddress = () => {
-    if (newAddress.trim()) {
-      form.setValue("addresses", [...addresses, newAddress.trim()]);
-      setNewAddress("");
-    }
+    setShowAddressErrors(true);
+    if (!isStructuredAddressComplete(draftAddress)) return;
+    const composed = formatStructuredAddress(draftAddress);
+    if (!composed) return;
+    form.setValue("addresses", [...addresses, composed]);
+    setDraftAddress({ ...EMPTY_STRUCTURED_ADDRESS });
+    setShowAddressErrors(false);
   };
 
   const removeAddress = (index: number) => {
@@ -539,22 +549,21 @@ function ProfilePanel() {
                 </div>
               ))}
               
-              <div className="flex gap-2 items-start mt-2">
-                <Input
-                  value={newAddress}
-                  onChange={(e) => setNewAddress(e.target.value)}
-                  placeholder="Add a new address (e.g., Home, Office)"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addAddress();
-                    }
-                  }}
+              <div className="mt-4 rounded-2xl border border-line bg-background/40 p-4">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Add organized address
+                </p>
+                <StructuredAddressFields
+                  value={draftAddress}
+                  onChange={setDraftAddress}
+                  showErrors={showAddressErrors}
                 />
-                <Button type="button" variant="outline" onClick={addAddress} className="shrink-0">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add
-                </Button>
+                <div className="mt-4">
+                  <Button type="button" variant="outline" onClick={addAddress}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add address
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
