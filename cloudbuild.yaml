@@ -1,9 +1,9 @@
 # Cloud Build → Artifact Registry / GCR image for Cloud Run
 # Usage:
 #   gcloud builds submit --config cloudbuild.yaml \
-#     --substitutions=_IMAGE=gcr.io/fab-clean-env-1234/fab-clean-api:$SHORT_SHA
+#     --substitutions=_IMAGE=gcr.io/fab-clean-env-1234/fab-clean-website-api:$SHORT_SHA
 substitutions:
-  _IMAGE: gcr.io/fab-clean-env-1234/fab-clean-api:latest
+  _IMAGE: gcr.io/fab-clean-env-1234/fab-clean-website-api:latest
 
 steps:
   - name: gcr.io/cloud-builders/docker
