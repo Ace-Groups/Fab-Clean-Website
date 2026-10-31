@@ -76,7 +76,7 @@ export default function Services() {
             </div>
           ) : (
             <div className="grid gap-5 lg:grid-cols-3">
-              {active.map((service, index) => {
+              {active.map((service: { id: string; icon?: string; name: string; startingPrice: number; description?: string; shortDescription?: string }, index: number) => {
                 const Icon = iconMap[(service.icon?.toLowerCase() as keyof typeof iconMap) || "shirt"] || Shirt;
 
                 return (
@@ -87,7 +87,7 @@ export default function Services() {
                         <StoryCard
                           icon={Icon}
                           title={service.name}
-                          description={service.shortDescription || service.description}
+                          description={service.shortDescription || service.description || ""}
                           className="border-none bg-transparent p-0 shadow-none"
                         />
                       </div>

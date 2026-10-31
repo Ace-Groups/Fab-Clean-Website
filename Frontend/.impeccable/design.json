@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "Quiet Linen Closet",
+  "seed": "8ef30738",
+  "mode": "persuade",
+  "colors": {
+    "background": "#E6ECE9",
+    "panel": "#F4F8F6",
+    "ink": "#142028",
+    "muted": "#5A6B72",
+    "line": "#C5D2CC",
+    "primary": "#2F7A74",
+    "deep": "#0F1A20",
+    "ticket": "#8A7350"
+  },
+  "fonts": {
+    "display": "Bricolage Grotesque",
+    "sans": "Figtree"
+  },
+  "motion": ["logo-breathe", "hero-rise", "booking-plane-slide"]
+}

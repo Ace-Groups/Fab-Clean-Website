@@ -193,28 +193,19 @@ function DashboardHome() {
         </Card>
       ) : null}
 
-      {/* Quick Stats Grid */}
-      <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
-        <Card className="lux-card p-5 bg-gradient-to-br from-panel to-panel/50">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Wallet Balance</p>
-          <p className="mt-2 text-3xl font-display text-ink">{wallet ? formatMoney(wallet.balance) : "..."}</p>
-        </Card>
-        <Card className="lux-card p-5 bg-gradient-to-br from-panel to-panel/50">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Active Orders</p>
-          <p className="mt-2 text-3xl font-display text-ink">{ordersQuery.isLoading ? "..." : activeOrdersCount}</p>
-        </Card>
-        <Card className="lux-card p-5 bg-gradient-to-br from-panel to-panel/50">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Total Orders</p>
-          <p className="mt-2 text-3xl font-display text-ink">{ordersQuery.isLoading ? "..." : orders.length}</p>
-        </Card>
-        <Card className="lux-card p-5 bg-gradient-to-br from-panel to-panel/50">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Total Spent</p>
-          <p className="mt-2 text-3xl font-display text-ink">{wallet ? formatMoney(wallet.totalSpent) : "..."}</p>
-        </Card>
-        <Card className="lux-card p-5 bg-gradient-to-br from-panel to-panel/50">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Pickup Bookings</p>
-          <p className="mt-2 text-3xl font-display text-ink">{pickupsQuery.isLoading ? "..." : pickups.length}</p>
-        </Card>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div className="cloth-panel p-5">
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Active orders</p>
+          <p className="mt-2 font-display text-3xl text-ink">{ordersQuery.isLoading ? "…" : activeOrdersCount}</p>
+        </div>
+        <div className="cloth-panel p-5">
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Pickup bookings</p>
+          <p className="mt-2 font-display text-3xl text-ink">{pickupsQuery.isLoading ? "…" : pickups.length}</p>
+        </div>
+        <div className="cloth-panel p-5">
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Wallet</p>
+          <p className="mt-2 font-display text-3xl text-ink">{wallet ? formatMoney(wallet.balance) : "…"}</p>
+        </div>
       </div>
 
       {/* Smart Quick Actions based on visitor intent */}
@@ -597,10 +588,10 @@ export default function Dashboard() {
       <div className="page-shell bg-background/30 min-h-screen">
         <section className="container-wide section-padding">
           {location === "/dashboard" && (
-            <SectionHeading 
-              align="left" 
-              title={greeting} 
-              subtitle="Welcome back" 
+            <SectionHeading
+              align="left"
+              title={greeting}
+              subtitle="Orders, pickups, and a light profile — nothing you do not need."
             />
           )}
         </section>

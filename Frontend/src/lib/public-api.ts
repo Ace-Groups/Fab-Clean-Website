@@ -91,23 +91,6 @@ export type FeedbackSubmitResponse = {
   };
 };
 
-export type HomepageReview = {
-  id: string;
-  customer_name?: string | null;
-  rating: number | string;
-  feedback?: string | null;
-  ai_category?: string | null;
-  ai_sentiment?: string | null;
-  ai_score?: number | string | null;
-  created_at: string;
-};
-
-export type HomepageReviewsResponse = {
-  topReviews: HomepageReview[];
-  bestReviews: HomepageReview[];
-  latestReviews: HomepageReview[];
-};
-
 import {
   DEFAULT_STORES,
   DEFAULT_REVIEWS,
@@ -118,15 +101,36 @@ import {
 
 export type { Store, HomepageReview, HomepageReviewsResponse };
 
+function normalizeStoreAddress(address: unknown): string {
+  if (typeof address !== "string") return "";
+  const trimmed = address.trim();
+  if (!trimmed || trimmed === "{}" || trimmed === "null" || trimmed === "undefined") return "";
+  return trimmed;
+}
+
+function sanitizeStores(stores: Store[]): Store[] {
+  return stores
+    .filter((store) => {
+      const slug = String(store.slug || "").toLowerCase();
+      const name = String(store.name || "").toLowerCase();
+      // MCET was removed from customer surfaces; keep it out of selectors.
+      return !name.includes("mcet") && !slug.includes("mcet");
+    })
+    .map((store) => ({
+      ...store,
+      address: normalizeStoreAddress(store.address),
+    }));
+}
+
 export async function fetchStores() {
   try {
     const res = await request<{ success: boolean; data: Store[] }>("/stores");
     if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
-      return res;
+      return { ...res, data: sanitizeStores(res.data) };
     }
-    return { success: true, data: DEFAULT_STORES };
+    return { success: true, data: sanitizeStores(DEFAULT_STORES) };
   } catch {
-    return { success: true, data: DEFAULT_STORES };
+    return { success: true, data: sanitizeStores(DEFAULT_STORES) };
   }
 }
 
