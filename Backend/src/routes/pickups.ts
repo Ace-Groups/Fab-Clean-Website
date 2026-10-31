@@ -31,14 +31,22 @@ async function createErpBooking(payload: Record<string, unknown>) {
     throw new Error(`ERP booking intake failed (${response.status}): ${failurePayload || response.statusText}`);
   }
 
-  const body = await response.json().catch(() => ({}));
-  const booking = body?.data?.booking || body?.booking || body?.data || null;
+  const body = (await response.json().catch(() => ({}))) as {
+    data?: { booking?: Record<string, unknown> } & Record<string, unknown>;
+    booking?: Record<string, unknown>;
+  };
+  const booking = (body?.data?.booking || body?.booking || body?.data || null) as Record<string, unknown> | null;
   if (!booking) return null;
 
   return {
-    id: booking.id ?? null,
-    bookingId: booking.bookingId ?? booking.booking_id ?? booking.requestNumber ?? booking.request_number ?? null,
-    status: booking.status ?? "new",
+    id: (booking.id as string | null | undefined) ?? null,
+    bookingId:
+      (booking.bookingId as string | null | undefined) ??
+      (booking.booking_id as string | null | undefined) ??
+      (booking.requestNumber as string | null | undefined) ??
+      (booking.request_number as string | null | undefined) ??
+      null,
+    status: (booking.status as string | undefined) ?? "new",
   };
 }
 
@@ -91,7 +99,7 @@ router.post("/pickups", async (req, res) => {
         customerPhone: String(phone),
         source: "website",
         channel: "web",
-        storeCode: String(sharedStore.code || "").toUpperCase() || null,
+        storeCode: String(("code" in sharedStore ? (sharedStore as { code?: string }).code : "") || "").toUpperCase() || null,
         preferredDate: String(preferredDate),
         preferredSlot: String(timeSlot),
         notes: specialInstructions ?? null,
@@ -216,8 +224,8 @@ router.get("/orders/track", async (req, res) => {
     }
 
     const pickup = await db.query.pickupsTable.findFirst({
-      where: (t, { and, eq }) =>
-        and(eq(t.customerPhone, phone), eq(t.bookingReference, ref)),
+      where: (t: { customerPhone: unknown; bookingReference: unknown }, helpers: { and: Function; eq: Function }) =>
+        helpers.and(helpers.eq(t.customerPhone, phone), helpers.eq(t.bookingReference, ref)),
     });
 
     if (!pickup) {

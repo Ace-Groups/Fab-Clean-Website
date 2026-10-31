@@ -91,23 +91,6 @@ export type FeedbackSubmitResponse = {
   };
 };
 
-export type HomepageReview = {
-  id: string;
-  customer_name?: string | null;
-  rating: number | string;
-  feedback?: string | null;
-  ai_category?: string | null;
-  ai_sentiment?: string | null;
-  ai_score?: number | string | null;
-  created_at: string;
-};
-
-export type HomepageReviewsResponse = {
-  topReviews: HomepageReview[];
-  bestReviews: HomepageReview[];
-  latestReviews: HomepageReview[];
-};
-
 import {
   DEFAULT_STORES,
   DEFAULT_REVIEWS,
