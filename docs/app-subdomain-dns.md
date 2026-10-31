@@ -23,7 +23,9 @@ Same Firebase Hosting site as marketing; hostname switches to the **AppShell**.
 
 | Type | Name | Target | Proxy |
 |------|------|--------|-------|
-| CNAME | `app` | Firebase target (e.g. `fab-clean-website.web.app`) | **DNS only** until SSL verifies, then Proxied + SSL **Full (strict)** |
+| CNAME | `app` | `fab-clean-website.web.app` | **DNS only** until SSL verifies, then Proxied + SSL **Full (strict)** |
+
+(`www` already uses that same target. Live check: `app` has **no** record yet.)
 
 3. Wait for Firebase domain status → Connected
 
@@ -35,7 +37,7 @@ git pull origin main
 ```
 
 ## Agent / MCP note
-Cursor Cloudflare MCP is currently authorized as **Ace-Digital** (`admin@acedigital.cc`) only — it cannot see or edit the Fab Clean `myfabclean.com` zone. To automate DNS: reconnect Cloudflare MCP with the **Fab Clean** account, then ask the agent to add the `app` CNAME.
+Cursor Cloudflare MCP is authorized as **Ace-Digital** (`admin@acedigital.cc`) only — no `myfabclean.com` zone there. DNS edits for `app` require the **Fab Clean** Cloudflare login (or a Fab Clean API token with Zone DNS Edit).
 
 ## Smoke
 1. https://app.myfabclean.com → `/login` or `/dashboard`
