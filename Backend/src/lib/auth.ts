@@ -1,7 +1,6 @@
 import jwt from "jsonwebtoken";
 import type { NextFunction, Request, Response } from "express";
-
-const JWT_SECRET = process.env.JWT_SECRET ?? "fab-clean-dev-secret-2025";
+import { AUTH_JWT_SECRET } from "./jwt-secret.js";
 
 export type AuthenticatedUser = {
   userId: string;
@@ -32,7 +31,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 
   try {
     const token = header.slice("Bearer ".length);
-    const payload = jwt.verify(token, JWT_SECRET) as Partial<AuthenticatedUser>;
+    const payload = jwt.verify(token, AUTH_JWT_SECRET) as Partial<AuthenticatedUser>;
 
     if (!payload.userId || !payload.phone) {
       res.status(401).json({

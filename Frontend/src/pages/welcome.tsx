@@ -24,11 +24,16 @@ import {
   pendingProfileGaps,
   type ProfileGapId,
 } from "@/lib/profile-gaps";
-import { fetchPortalProfile, patchPortalProfile, type PortalProfile } from "@/lib/portal-api";
+import {
+  fetchPortalProfile,
+  patchPortalProfile,
+  uploadPortalAvatar,
+  type PortalProfile,
+} from "@/lib/portal-api";
 
 export default function Welcome() {
   const [location, setLocation] = useLocation();
-  const { token, isAuthenticated } = useAuth();
+  const { token, isAuthenticated, sessionReady } = useAuth();
   const queryClient = useQueryClient();
 
   const nextPath = useMemo(() => {
@@ -54,6 +59,7 @@ export default function Welcome() {
   const copy = activeGap ? PROFILE_GAP_COPY[activeGap] : null;
 
   useEffect(() => {
+    if (!sessionReady) return;
     if (!isAuthenticated || !token) {
       setLocation(`/login?redirect=${encodeURIComponent(`/welcome?next=${encodeURIComponent(nextPath)}`)}`);
       return;
@@ -86,7 +92,7 @@ export default function Welcome() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, token, nextPath, setLocation]);
+  }, [sessionReady, isAuthenticated, token, nextPath, setLocation]);
 
   useEffect(() => {
     if (loading || !profile) return;
@@ -173,8 +179,10 @@ export default function Welcome() {
           await onSkip();
           return;
         }
-        const res = await patchPortalProfile(token, { avatarUrl: photoPreview });
-        advanceAfterSave(res.data);
+        await uploadPortalAvatar(token, photoPreview);
+        const updated = await refreshProfile();
+        if (updated) advanceAfterSave(updated);
+        return;
       }
       await refreshProfile();
     } catch (error) {

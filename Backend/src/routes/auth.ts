@@ -5,6 +5,7 @@ import { eq, sql } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { normalizePhone, requireAuth } from "../lib/auth.js";
+import { AUTH_JWT_SECRET } from "../lib/jwt-secret.js";
 
 type OtpSession = {
   id: string;
@@ -32,19 +33,7 @@ type SessionUser = {
 
 const router: IRouter = Router();
 
-const JWT_SECRET = process.env.JWT_SECRET;
-let ACTUAL_JWT_SECRET = JWT_SECRET;
-
-if (!ACTUAL_JWT_SECRET) {
-  if (process.env.NODE_ENV === "production") {
-    console.warn("⚠️ WARNING: JWT_SECRET environment variable is missing! Generating a random temporary secret. Note: Users will be logged out on every server restart until you set a persistent JWT_SECRET in your environment.");
-    ACTUAL_JWT_SECRET = crypto.randomBytes(32).toString("hex");
-  } else {
-    ACTUAL_JWT_SECRET = "fab-clean-dev-secret-2025";
-  }
-}
-
-const AUTH_SECRET = ACTUAL_JWT_SECRET ?? "fab-clean-dev-secret-2025";
+const AUTH_SECRET = AUTH_JWT_SECRET;
 
 const otpSessions = new Map<string, OtpSession>();
 const latestOtpSessionByPhone = new Map<string, string>();

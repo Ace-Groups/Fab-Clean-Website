@@ -10,6 +10,7 @@ import {
   mapWalletSummary,
   updateCustomerById,
 } from "../lib/supabase-admin.js";
+import { isR2Configured, parseDataUrl, uploadPublicObject } from "../lib/r2.js";
 
 const router: IRouter = Router();
 
@@ -115,11 +116,71 @@ router.get("/users/profile", requireAuth, async (req, res) => {
   }
 });
 
+router.post("/users/avatar", requireAuth, async (req, res) => {
+  try {
+    if (!isR2Configured()) {
+      res.status(503).json({
+        success: false,
+        error: {
+          code: "NOT_CONFIGURED",
+          message: "Photo storage is not configured yet. Please try again shortly.",
+        },
+      });
+      return;
+    }
+
+    const dataUrl =
+      typeof req.body?.imageDataUrl === "string"
+        ? req.body.imageDataUrl
+        : typeof req.body?.dataUrl === "string"
+          ? req.body.dataUrl
+          : "";
+    if (!dataUrl.startsWith("data:image/")) {
+      res.status(400).json({
+        success: false,
+        error: { code: "VALIDATION_ERROR", message: "Choose a photo to upload." },
+      });
+      return;
+    }
+
+    const { buffer, contentType } = parseDataUrl(dataUrl);
+    const ext = contentType.includes("png") ? "png" : "jpg";
+    const key = `avatars/${req.authUser!.userId}/${Date.now()}.${ext}`;
+    const avatarUrl = await uploadPublicObject(key, buffer, contentType);
+
+    const [updatedUser] = await db
+      .update(usersTable)
+      .set({ avatarUrl, updatedAt: new Date() })
+      .where(eq(usersTable.id, req.authUser!.userId))
+      .returning();
+
+    res.json({
+      success: true,
+      data: {
+        avatarUrl: updatedUser?.avatarUrl || avatarUrl,
+      },
+    });
+  } catch (err) {
+    req.log.error(err, "Failed to upload avatar");
+    const message = err instanceof Error ? err.message : "Failed to upload photo";
+    const missingColumn = /avatar_url|column/i.test(message);
+    res.status(missingColumn ? 503 : 500).json({
+      success: false,
+      error: {
+        code: missingColumn ? "MIGRATION_REQUIRED" : "INTERNAL_ERROR",
+        message: missingColumn
+          ? "Photo storage column is missing. Run sql/2026-10-31-user-avatar-url.sql then retry."
+          : "Failed to upload photo",
+      },
+    });
+  }
+});
+
 router.patch("/users/profile", requireAuth, async (req, res) => {
   try {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : undefined;
     const email = typeof req.body?.email === "string" ? req.body.email.trim() : undefined;
-    const avatarUrl =
+    let avatarUrl =
       typeof req.body?.avatarUrl === "string"
         ? req.body.avatarUrl.trim()
         : typeof req.body?.avatar_url === "string"
@@ -129,10 +190,14 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
       ? req.body.addresses.filter((a: any) => typeof a === "string" && a.trim() !== "")
       : undefined;
 
-    if (avatarUrl !== undefined && avatarUrl.length > 180_000) {
+    // Never persist data-URL blobs in Postgres — use /users/avatar → R2.
+    if (avatarUrl?.startsWith("data:")) {
       res.status(400).json({
         success: false,
-        error: { code: "VALIDATION_ERROR", message: "Photo is too large. Try a smaller image." },
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Upload photos via the avatar endpoint (Cloudflare R2).",
+        },
       });
       return;
     }

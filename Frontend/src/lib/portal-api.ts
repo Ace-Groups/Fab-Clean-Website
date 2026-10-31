@@ -80,3 +80,10 @@ export async function patchPortalProfile(token: string, data: PortalProfilePatch
     body: JSON.stringify(data),
   });
 }
+
+export async function uploadPortalAvatar(token: string, imageDataUrl: string) {
+  return request<{ success: boolean; data: { avatarUrl: string } }>("/api/users/avatar", token, {
+    method: "POST",
+    body: JSON.stringify({ imageDataUrl }),
+  });
+}
