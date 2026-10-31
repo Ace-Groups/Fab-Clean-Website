@@ -149,29 +149,41 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** initSendOTP with exposeMethods:true — no MSG91 overlay; use window.sendOtp / verifyOtp. */
-export async function initMsg91ExposeMethods(config: Msg91WidgetConfig): Promise<void> {
+/**
+ * initSendOTP with exposeMethods:true — no MSG91 overlay; use window.sendOtp / verifyOtp.
+ * MSG91 still requires success/failure functions on the config object (throws otherwise).
+ */
+export async function initMsg91ExposeMethods(
+  config: Msg91WidgetConfig,
+  handlers?: { success?: Msg91WidgetCallback; failure?: Msg91WidgetCallback },
+): Promise<void> {
   await ensureMsg91WidgetScript();
   if (!window.initSendOTP) {
     throw new Error("OTP widget failed to initialize");
   }
 
-  if (!methodsInitialized || !window.sendOtp || !window.verifyOtp) {
+  const success: Msg91WidgetCallback = handlers?.success ?? (() => undefined);
+  const failure: Msg91WidgetCallback = handlers?.failure ?? (() => undefined);
+
+  if (!methodsInitialized || typeof window.sendOtp !== "function" || typeof window.verifyOtp !== "function") {
     window.initSendOTP({
       widgetId: config.widgetId,
       tokenAuth: config.tokenAuth,
       exposeMethods: true,
+      success,
+      failure,
     });
-    methodsInitialized = true;
   }
 
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (typeof window.sendOtp === "function" && typeof window.verifyOtp === "function") {
+      methodsInitialized = true;
       return;
     }
     await sleep(50);
   }
 
+  methodsInitialized = false;
   throw new Error("OTP methods are not available. Please refresh and try again.");
 }
 
