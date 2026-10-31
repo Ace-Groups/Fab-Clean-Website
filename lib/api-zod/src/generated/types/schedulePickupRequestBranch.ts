@@ -11,5 +11,7 @@ export type SchedulePickupRequestBranch =
 
 export const SchedulePickupRequestBranch = {
   pollachi: "pollachi",
+  suleeshwaranpatti: "suleeshwaranpatti",
+  udumalpet: "udumalpet",
   kinathukadavu: "kinathukadavu",
 } as const;

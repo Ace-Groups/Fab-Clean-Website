@@ -6,6 +6,7 @@ import { AppLayout } from "@/components/layout";
 import { SEO } from "@/components/seo";
 import { useAuth } from "@/hooks/use-auth";
 import { Button, FadeIn } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import { BrandLogo } from "@/components/brand-logo";
 import {
   BRAND,
@@ -13,20 +14,43 @@ import {
   PROCESS_STEPS,
   SERVICE_HIGHLIGHTS,
 } from "@/lib/brand";
-import { fetchStores, type Store } from "@/lib/public-api";
+import { fetchHomepageReviews, type HomepageReview } from "@/lib/public-api";
+import { useNearestStore } from "@/hooks/use-nearest-store";
+import { storeRegionKeywords } from "@/lib/geo";
+import { DEFAULT_REVIEWS } from "@/lib/site-catalog";
+
+function filterReviewsForStore(reviews: HomepageReview[], storeSlug: string | undefined) {
+  if (!storeSlug) return reviews;
+  const keywords = storeRegionKeywords(storeSlug);
+  const filtered = reviews.filter((review) => {
+    const haystack = `${review.feedback ?? ""} ${review.ai_category ?? ""}`.toLowerCase();
+    return keywords.some((kw) => haystack.includes(kw));
+  });
+  return filtered.length > 0 ? filtered : reviews;
+}
 
 export default function Home() {
   const { isAuthenticated } = useAuth();
-  const [stores, setStores] = useState<Store[]>([]);
   const reduceMotion = useReducedMotion();
+  const { storesNearestFirst, nearestStore } = useNearestStore({ requestOnMount: true });
+  const [reviews, setReviews] = useState(DEFAULT_REVIEWS);
 
   useEffect(() => {
-    void fetchStores()
+    void fetchHomepageReviews()
       .then((res) => {
-        if (res.success) setStores(res.data);
+        if (res.success && res.data) setReviews(res.data);
       })
-      .catch(() => setStores([]));
+      .catch(() => undefined);
   }, []);
+
+  const localHeroLead = nearestStore
+    ? `${BRAND.heroLead} Your nearest branch is ${nearestStore.name.replace(/^Fab Clean - /, "")}.`
+    : BRAND.heroLead;
+
+  const displayReviews = filterReviewsForStore(
+    [...reviews.topReviews, ...reviews.bestReviews].slice(0, 3),
+    nearestStore?.slug,
+  );
 
   return (
     <AppLayout>
@@ -63,9 +87,27 @@ export default function Home() {
             <h1 className="max-w-xl font-display text-2xl leading-snug text-white sm:text-3xl md:text-[2.5rem]">
               {BRAND.heroTitle}
             </h1>
-            <p className="mt-5 max-w-lg text-base leading-7 text-white/80 sm:text-lg">
-              {BRAND.heroLead}
-            </p>
+            <p className="mt-5 max-w-lg text-base leading-7 text-white/80 sm:text-lg">{localHeroLead}</p>
+            {nearestStore ? (
+              <p className="mt-3 max-w-lg text-sm leading-6 text-white/70">
+                Serving {nearestStore.name.replace(/^Fab Clean - /, "")} —{" "}
+                {nearestStore.phone}
+                {nearestStore.mapHref ? (
+                  <>
+                    {" "}
+                    ·{" "}
+                    <a
+                      href={nearestStore.mapHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-2 hover:text-white"
+                    >
+                      Directions
+                    </a>
+                  </>
+                ) : null}
+              </p>
+            ) : null}
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
               <Link href="/schedule-pickup">
                 <Button size="lg" className="w-full sm:w-auto" data-cursor-label="Book">
@@ -163,15 +205,34 @@ export default function Home() {
         <div className="container-wide">
           <FadeIn>
             <h2 className="font-display text-3xl text-ink sm:text-4xl">Nearby when you need us</h2>
-            <p className="mt-3 text-muted-foreground">{BRAND.hours}</p>
+            <p className="mt-3 text-muted-foreground">
+              {BRAND.hours}
+              {nearestStore ? (
+                <>
+                  {" "}
+                  · Closest to you:{" "}
+                  <span className="font-medium text-ink">{nearestStore.name}</span>
+                </>
+              ) : null}
+            </p>
           </FadeIn>
-          <div className="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {(stores.length ? stores : []).map((branch) => (
+          <div className="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-2">
+            {storesNearestFirst.map((branch) => (
               <FadeIn key={branch.slug}>
-                <div className="cloth-panel p-6">
+                <div
+                  className={cn(
+                    "cloth-panel p-6",
+                    branch.slug === nearestStore?.slug && "ring-1 ring-primary/25",
+                  )}
+                >
                   <div className="flex items-center gap-2 text-ink">
                     <MapPin className="h-4 w-4 text-primary" />
                     <p className="font-medium">{branch.name}</p>
+                    {branch.slug === nearestStore?.slug ? (
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
+                        Nearest
+                      </span>
+                    ) : null}
                   </div>
                   <p className="mt-3 text-sm leading-6 text-muted-foreground">{branch.address}</p>
                   {branch.phone ? (
@@ -180,10 +241,35 @@ export default function Home() {
                       {branch.phone}
                     </a>
                   ) : null}
+                  {branch.mapHref ? (
+                    <a
+                      href={branch.mapHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 block text-sm text-muted-foreground underline-offset-4 hover:text-primary hover:underline"
+                    >
+                      Open in Maps
+                    </a>
+                  ) : null}
                 </div>
               </FadeIn>
             ))}
           </div>
+          {displayReviews.length > 0 ? (
+            <div className="mt-14">
+              <h3 className="font-display text-2xl text-ink">What neighbors say nearby</h3>
+              <ul className="mt-6 grid gap-4 md:grid-cols-3">
+                {displayReviews.map((review) => (
+                  <li key={review.id} className="rounded-2xl border border-line bg-background/60 p-5 text-sm leading-7 text-muted-foreground">
+                    <p className="text-ink">{review.feedback}</p>
+                    <p className="mt-3 text-xs uppercase tracking-wide text-muted-foreground">
+                      {review.customer_name ?? "Fab Clean customer"}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <div className="mt-12 flex flex-col items-start gap-4 rounded-[1.75rem] bg-deep px-6 py-8 text-white sm:flex-row sm:items-center sm:justify-between sm:px-10">
             <div>
               <p className="font-display text-2xl sm:text-3xl">Ready when you are</p>

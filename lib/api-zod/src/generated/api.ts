@@ -89,7 +89,7 @@ export const SchedulePickupBody = zod.object({
   specialInstructions: zod.string().optional(),
   preferredDate: zod.date(),
   timeSlot: zod.enum(["morning", "afternoon", "evening"]),
-  branch: zod.enum(["pollachi", "kinathukadavu"]),
+  branch: zod.enum(["pollachi", "suleeshwaranpatti", "udumalpet", "kinathukadavu"]),
 });
 
 /**
