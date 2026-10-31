@@ -18,6 +18,8 @@ interface AuthContextType {
   /** Persist access + refresh so the next visit stays signed in. */
   setSession: (accessToken: string, refreshToken?: string | null) => void;
   isAuthenticated: boolean;
+  /** True after bootstrap refresh attempt finishes (avoids race 401s). */
+  sessionReady: boolean;
   logout: () => void;
 }
 
@@ -50,6 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     return localStorage.getItem(TOKEN_KEY);
   });
+  const [sessionReady, setSessionReady] = useState(false);
   const queryClient = useQueryClient();
   const bootstrapped = useRef(false);
 
@@ -91,12 +94,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (readIdleExpired()) {
       clearSessionStorage();
       setTokenState(null);
+      setSessionReady(true);
       return;
     }
 
     const refresh = localStorage.getItem(REFRESH_KEY);
     if (!refresh) {
       if (localStorage.getItem(TOKEN_KEY)) touchLastAccess();
+      setSessionReady(true);
       return;
     }
 
@@ -124,7 +129,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .catch(() => {
         /* keep existing access token if refresh network fails */
         touchLastAccess();
-      });
+      })
+      .finally(() => setSessionReady(true));
   }, [setSession]);
 
   // 30-day inactivity clock
@@ -159,7 +165,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [token, logout]);
 
   return (
-    <AuthContext.Provider value={{ token, setToken, setSession, isAuthenticated: !!token, logout }}>
+    <AuthContext.Provider
+      value={{ token, setToken, setSession, isAuthenticated: !!token, sessionReady, logout }}
+    >
       {children}
     </AuthContext.Provider>
   );
