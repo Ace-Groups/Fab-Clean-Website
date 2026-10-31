@@ -5,7 +5,9 @@ interface SEOProps {
   description: string;
   canonical: string;
   ogImage?: string;
+  keywords?: string;
   schema?: object;
+  noIndex?: boolean;
 }
 
 export function SEO({
@@ -13,7 +15,9 @@ export function SEO({
   description,
   canonical,
   ogImage = "https://myfabclean.com/opengraph.jpg",
+  keywords,
   schema,
+  noIndex = false,
 }: SEOProps) {
   useEffect(() => {
     document.title = title;
@@ -31,6 +35,8 @@ export function SEO({
     };
 
     setMeta('meta[name="description"]',         description);
+    setMeta('meta[name="robots"]', noIndex ? "noindex, nofollow" : "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1");
+    if (keywords) setMeta('meta[name="keywords"]', keywords);
     setMeta('meta[property="og:title"]',         title);
     setMeta('meta[property="og:description"]',   description);
     setMeta('meta[property="og:url"]',           canonical);
@@ -59,7 +65,7 @@ export function SEO({
       }
       script.textContent = JSON.stringify(schema);
     }
-  }, [title, description, canonical, ogImage, schema]);
+  }, [title, description, canonical, ogImage, keywords, schema, noIndex]);
 
   return null;
 }

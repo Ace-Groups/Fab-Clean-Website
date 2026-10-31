@@ -1,10 +1,11 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/hooks/use-auth";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { PointerFeedbackProvider } from "@/components/site";
+import { trackPageView } from "@/lib/analytics";
 
 // Pages
 const Home = lazy(() => import("@/pages/home"));
@@ -36,9 +37,18 @@ const queryClient = new QueryClient({
   },
 });
 
+function AnalyticsListener() {
+  const [location] = useLocation();
+  useEffect(() => {
+    trackPageView(location);
+  }, [location]);
+  return null;
+}
+
 function Router() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <AnalyticsListener />
       <Switch>
         <Route path="/" component={Home} />
         <Route path="/services" component={Services} />
