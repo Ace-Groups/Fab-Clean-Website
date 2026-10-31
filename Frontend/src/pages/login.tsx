@@ -23,7 +23,7 @@ type LoginStep = "phone" | "otp";
 
 export default function Login() {
   const [location, setLocation] = useLocation();
-  const { isAuthenticated, setToken } = useAuth();
+  const { isAuthenticated, setSession } = useAuth();
   const [step, setStep] = useState<LoginStep>("phone");
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
@@ -42,7 +42,7 @@ export default function Login() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      setLocation(redirectTarget);
+      setLocation(`/welcome?next=${encodeURIComponent(redirectTarget)}`);
     }
   }, [isAuthenticated, redirectTarget, setLocation]);
 
@@ -65,10 +65,11 @@ export default function Login() {
         throw new Error(body?.error?.message || "Verification failed");
       }
       const token = body?.data?.accessToken || body?.accessToken || body?.token;
+      const refresh = body?.data?.refreshToken || body?.refreshToken || null;
       if (!token) throw new Error("No session token returned");
-      setToken(token);
+      setSession(token, refresh);
       toast({ title: "Signed in", description: "Welcome back to Fab Clean." });
-      setLocation(redirectTarget);
+      setLocation(`/welcome?next=${encodeURIComponent(redirectTarget)}`);
     } catch (error) {
       toast({
         title: "Sign-in failed",

@@ -105,10 +105,11 @@ function issueRefreshToken(userId: string): string {
 }
 
 function setRefreshCookie(res: Response, refreshToken: string): void {
+  // Cross-site SPA (Firebase) → API (Cloud Run) needs SameSite=None; Secure.
   res.cookie("refresh_token", refreshToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     maxAge: 30 * 24 * 60 * 60 * 1000,
   });
 }

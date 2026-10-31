@@ -101,6 +101,7 @@ router.get("/users/profile", requireAuth, async (req, res) => {
         phone: req.authUser!.phone,
         name: user?.name || customer?.name || undefined,
         email: user?.email || customer?.email || undefined,
+        avatarUrl: user?.avatarUrl || undefined,
         addresses: user?.addresses || [],
         createdAt: user?.createdAt?.toISOString?.() || customer?.created_at || undefined,
       },
@@ -118,7 +119,23 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
   try {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : undefined;
     const email = typeof req.body?.email === "string" ? req.body.email.trim() : undefined;
-    const addresses = Array.isArray(req.body?.addresses) ? req.body.addresses.filter((a: any) => typeof a === "string" && a.trim() !== "") : undefined;
+    const avatarUrl =
+      typeof req.body?.avatarUrl === "string"
+        ? req.body.avatarUrl.trim()
+        : typeof req.body?.avatar_url === "string"
+          ? req.body.avatar_url.trim()
+          : undefined;
+    const addresses = Array.isArray(req.body?.addresses)
+      ? req.body.addresses.filter((a: any) => typeof a === "string" && a.trim() !== "")
+      : undefined;
+
+    if (avatarUrl !== undefined && avatarUrl.length > 180_000) {
+      res.status(400).json({
+        success: false,
+        error: { code: "VALIDATION_ERROR", message: "Photo is too large. Try a smaller image." },
+      });
+      return;
+    }
 
     const [updatedUser, customer] = await Promise.all([
       db
@@ -126,7 +143,9 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
         .set({
           ...(name !== undefined ? { name: name || null } : {}),
           ...(email !== undefined ? { email: email || null } : {}),
+          ...(avatarUrl !== undefined ? { avatarUrl: avatarUrl || null } : {}),
           ...(addresses !== undefined ? { addresses } : {}),
+          updatedAt: new Date(),
         })
         .where(eq(usersTable.id, req.authUser!.userId))
         .returning()
@@ -148,6 +167,7 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
         phone: req.authUser!.phone,
         name: updatedUser?.name || customer?.name || undefined,
         email: updatedUser?.email || customer?.email || undefined,
+        avatarUrl: updatedUser?.avatarUrl || undefined,
         addresses: updatedUser?.addresses || [],
         createdAt: updatedUser?.createdAt?.toISOString?.() || customer?.created_at || undefined,
       },
