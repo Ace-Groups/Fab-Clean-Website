@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Build frontend and deploy Firebase Hosting (myfabclean.com / fab-clean-website target).
+# If deploy fails with expired credentials: firebase login --reauth
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
