@@ -94,6 +94,7 @@ export type FeedbackSubmitResponse = {
 import {
   DEFAULT_STORES,
   DEFAULT_REVIEWS,
+  isCustomerFacingStore,
   type Store,
   type HomepageReview,
   type HomepageReviewsResponse,
@@ -110,12 +111,7 @@ function normalizeStoreAddress(address: unknown): string {
 
 function sanitizeStores(stores: Store[]): Store[] {
   return stores
-    .filter((store) => {
-      const slug = String(store.slug || "").toLowerCase();
-      const name = String(store.name || "").toLowerCase();
-      // MCET was removed from customer surfaces; keep it out of selectors.
-      return !name.includes("mcet") && !slug.includes("mcet");
-    })
+    .filter(isCustomerFacingStore)
     .map((store) => ({
       ...store,
       address: normalizeStoreAddress(store.address),
