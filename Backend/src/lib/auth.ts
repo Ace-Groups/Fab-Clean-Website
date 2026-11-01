@@ -1,11 +1,15 @@
 import jwt from "jsonwebtoken";
 import type { NextFunction, Request, Response } from "express";
 
-const JWT_SECRET = process.env.JWT_SECRET ?? "fab-clean-dev-secret-2025";
+export const JWT_SECRET = process.env.JWT_SECRET || process.env.AUTH_SECRET || "fab-clean-jwt-production-secret-2026-suleeshwaranpatti";
 
 export type AuthenticatedUser = {
   userId: string;
-  phone: string;
+  phone?: string;
+  customerId?: string;
+  type?: string;
+  role?: string;
+  employeeId?: string;
 };
 
 declare global {
@@ -32,9 +36,26 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 
   try {
     const token = header.slice("Bearer ".length);
-    const payload = jwt.verify(token, JWT_SECRET) as Partial<AuthenticatedUser>;
+    let payload: any;
+    try {
+      payload = jwt.verify(token, JWT_SECRET) as any;
+    } catch (err: any) {
+      if (err.name === "TokenExpiredError") {
+        // Cryptographically verify token signature ignoring expiration claim
+        payload = jwt.verify(token, JWT_SECRET, { ignoreExpiration: true }) as any;
+        // Allow session token valid for up to 90 days from issued time
+        const issuedAtSec = payload.iat || 0;
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (issuedAtSec > 0 && nowSec - issuedAtSec > 90 * 24 * 60 * 60) {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
 
-    if (!payload.userId || !payload.phone) {
+    const id = payload.id || payload.userId || payload.sub;
+    if (!id) {
       res.status(401).json({
         success: false,
         error: { code: "UNAUTHORIZED", message: "Invalid session token" },
@@ -43,8 +64,12 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
     }
 
     req.authUser = {
-      userId: payload.userId,
-      phone: normalizePhone(payload.phone),
+      userId: id,
+      phone: payload.phone ? normalizePhone(payload.phone) : undefined,
+      customerId: payload.customerId,
+      type: payload.type || (payload.role ? "employee" : "user"),
+      role: payload.role,
+      employeeId: payload.employeeId,
     };
     next();
   } catch {

@@ -1,4 +1,4 @@
-type SupabaseMethod = "GET" | "POST" | "PATCH";
+export type SupabaseMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -16,9 +16,9 @@ function buildUrl(path: string): string {
   return `${baseUrl}${path}`;
 }
 
-async function request<T>(
+export async function supabaseRequest<T>(
   path: string,
-  method: SupabaseMethod,
+  method: SupabaseMethod = "GET",
   body?: unknown,
   extraHeaders?: Record<string, string>,
 ): Promise<T> {
@@ -42,6 +42,15 @@ async function request<T>(
   }
 
   return parsed as T;
+}
+
+async function request<T>(
+  path: string,
+  method: SupabaseMethod,
+  body?: unknown,
+  extraHeaders?: Record<string, string>,
+): Promise<T> {
+  return supabaseRequest<T>(path, method, body, extraHeaders);
 }
 
 export type PublicOrderRecord = {
@@ -228,18 +237,29 @@ export async function fetchOrdersByPhone(phone: string): Promise<PublicOrderReco
   const select =
     "id,order_number,customer_id,customer_name,customer_phone,status,payment_status,total_amount,items,fulfillment_type,pickup_date,invoice_url,created_at,updated_at,rating,feedback,ai_category,ai_sentiment,ai_score";
 
-  if (customer?.id) {
-    return request<PublicOrderRecord[]>(
-      `/rest/v1/orders?select=${select}&customer_id=eq.${encodeIdentifier(customer.id)}&order=created_at.desc`,
-      "GET",
-    );
+  const candidates = phoneCandidates(cleanPhone);
+  if (customer?.secondary_phone) {
+    candidates.push(...phoneCandidates(customer.secondary_phone));
   }
-  const candidates = phoneCandidates(phone);
-  const ors = candidates.map((candidate) => `customer_phone.eq.${encodeIdentifier(candidate)}`).join(",");
-  return request<PublicOrderRecord[]>(
-    `/rest/v1/orders?select=${select}&or=(${ors})&order=created_at.desc`,
+  const filterList: string[] = candidates.map(
+    (candidate) => `customer_phone.eq.${encodeIdentifier(candidate)}`,
+  );
+  if (customer?.id) {
+    filterList.push(`customer_id.eq.${encodeIdentifier(customer.id)}`);
+  }
+  const orCondition = filterList.join(",");
+
+  const orders = await request<PublicOrderRecord[]>(
+    `/rest/v1/orders?select=${select}&or=(${orCondition})&order=created_at.desc`,
     "GET",
   );
+
+  const seen = new Set<string>();
+  return orders.filter((o) => {
+    if (seen.has(o.id)) return false;
+    seen.add(o.id);
+    return true;
+  });
 }
 
 export async function fetchOwnedOrderById(phone: string, orderId: string): Promise<PublicOrderRecord | null> {
@@ -287,6 +307,31 @@ export async function updateOrder(orderId: string, payload: Record<string, unkno
     {
       Prefer: "return=minimal",
     },
+  );
+}
+
+export async function insertTransaction(payload: Record<string, unknown>): Promise<any> {
+  return request(`/rest/v1/transactions`, "POST", payload, {
+    Prefer: "return=representation",
+  });
+}
+
+export async function insertCreditTransaction(payload: Record<string, unknown>): Promise<any> {
+  return request(`/rest/v1/credit_transactions`, "POST", payload, {
+    Prefer: "return=representation",
+  });
+}
+
+export async function insertWalletTransaction(payload: Record<string, unknown>): Promise<any> {
+  return request(`/rest/v1/wallet_transactions`, "POST", payload, {
+    Prefer: "return=representation",
+  });
+}
+
+export async function fetchWalletTransactions(customerId: string): Promise<any[]> {
+  return request<any[]>(
+    `/rest/v1/wallet_transactions?customer_id=eq.${encodeIdentifier(customerId)}&order=created_at.desc&limit=50`,
+    "GET",
   );
 }
 

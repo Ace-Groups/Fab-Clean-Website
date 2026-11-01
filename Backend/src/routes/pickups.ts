@@ -1,8 +1,10 @@
 import { Router, type IRouter } from "express";
+import jwt from "jsonwebtoken";
 import { db } from "@workspace/db";
 import { pickupsTable, storesTable, usersTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { fetchAppStores } from "../lib/supabase-admin.js";
+import { JWT_SECRET } from "../lib/auth.js";
 
 const router: IRouter = Router();
 
@@ -52,37 +54,61 @@ async function createErpBooking(payload: Record<string, unknown>) {
 
 router.post("/pickups", async (req, res) => {
   try {
-    const {
-      name,
-      phone,
-      address,
-      addressLat,
-      addressLng,
-      services,
-      specialInstructions,
-      preferredDate,
-      timeSlot,
-      branch,
-    } = req.body;
+    let authUserPhone = "";
+    let authUserName = "";
+    let authUserId: string | null = null;
+    if (req.headers.authorization) {
+      try {
+        const token = req.headers.authorization.replace(/^Bearer\s+/i, "").trim();
+        const decoded = jwt.verify(token, JWT_SECRET) as any;
+        if (decoded?.phone) authUserPhone = String(decoded.phone);
+        if (decoded?.name) authUserName = String(decoded.name);
+        if (decoded?.userId) authUserId = String(decoded.userId);
+      } catch (_) {}
+    }
+
+    const name = String(req.body.name || req.body.customerName || req.body.customer_name || authUserName || "Valued Customer").trim();
+    const phone = String(req.body.phone || req.body.customerPhone || req.body.customer_phone || authUserPhone || "").trim();
+    const address = String(req.body.address || "").trim();
+    const addressLat = req.body.addressLat;
+    const addressLng = req.body.addressLng;
+    const services = req.body.services;
+    const specialInstructions = req.body.specialInstructions || req.body.notes;
+    const preferredDate = String(req.body.preferredDate || req.body.date || req.body.scheduledDate || "Tomorrow").trim();
+    const rawTimeSlot = String(req.body.timeSlot || req.body.time_slot || req.body.slot || "Morning").trim();
+    
+    // Normalize timeSlot to database enum: 'morning' | 'afternoon' | 'evening'
+    const s = rawTimeSlot.toLowerCase();
+    const normalizedTimeSlot: "morning" | "afternoon" | "evening" = 
+      s.includes("morn") || s.includes("09:") || s.includes("9")
+        ? "morning"
+        : s.includes("after") || s.includes("01:") || s.includes("1:") || s.includes("12:")
+        ? "afternoon"
+        : s.includes("even") || s.includes("04:") || s.includes("4:") || s.includes("night")
+        ? "evening"
+        : "morning";
+
+    const rawBranch = String(req.body.branch || req.body.store || "suleeshwaranpatti").toLowerCase();
+    const branch = rawBranch.includes("pollachi") ? "pollachi" : "suleeshwaranpatti";
 
     const resolvedServices = Array.isArray(services) && services.length > 0
       ? services
       : ["Pickup — details at door"];
 
-    if (!name || !phone || !address || !preferredDate || !timeSlot || !branch) {
+    if (!phone || !address) {
       res.status(400).json({
         success: false,
-        error: { code: "VALIDATION_ERROR", message: "Missing required fields" },
+        error: { code: "VALIDATION_ERROR", message: "Missing required fields: phone and address are required" },
       });
       return;
     }
 
     const store = await db.query.storesTable.findFirst({
-      where: and(eq(storesTable.slug, String(branch)), eq(storesTable.isActive, true)),
+      where: and(eq(storesTable.slug, branch), eq(storesTable.isActive, true)),
     });
 
     const appStores = store ? [] : await fetchAppStores();
-    const sharedStore = store ?? appStores.find((item) => item.slug === String(branch) && item.is_active !== false);
+    const sharedStore = store ?? appStores.find((item) => (item.slug === branch || item.id === branch) && item.is_active !== false) ?? appStores[0];
 
     if (!sharedStore) {
       res.status(400).json({
@@ -101,7 +127,7 @@ router.post("/pickups", async (req, res) => {
         channel: "web",
         storeCode: String(("code" in sharedStore ? (sharedStore as { code?: string }).code : "") || "").toUpperCase() || null,
         preferredDate: String(preferredDate),
-        preferredSlot: String(timeSlot),
+        preferredSlot: String(rawTimeSlot),
         notes: specialInstructions ?? null,
         pickupAddress: {
           line1: String(address),
@@ -129,7 +155,7 @@ router.post("/pickups", async (req, res) => {
       services: resolvedServices,
       specialInstructions: specialInstructions ?? null,
       preferredDate,
-      timeSlot,
+      timeSlot: normalizedTimeSlot,
       branch: sharedStore.slug,
     });
 
