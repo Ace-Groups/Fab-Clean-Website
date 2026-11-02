@@ -12,7 +12,7 @@ import crypto from "crypto";
 import { supabaseRequest, fetchCustomerByPhone } from "../lib/supabase-admin.js";
 import { recordOrderCreditDebit, recordWalletPaymentDebit } from "../lib/wallet-engine.js";
 import { isR2Configured, uploadPublicObject } from "../lib/r2.js";
-import { sendMsg91OrderInvoiceEmail } from "../lib/msg91-email.js";
+import { sendMsg91OrderInvoiceEmail, sendMsg91OrderStatusEmail } from "../lib/msg91-email.js";
 
 const router: IRouter = Router();
 
@@ -82,6 +82,17 @@ function mapOrderForErp(o: any) {
     customerPhone: o.customer_phone || "",
     customer_phone: o.customer_phone || "",
     customerEmail: o.customer_email || "",
+    customer_email: o.customer_email || "",
+    whatsappMessageCount: Number(o.whatsapp_message_count || 0),
+    whatsapp_message_count: Number(o.whatsapp_message_count || 0),
+    lastWhatsappStatus: o.last_whatsapp_status || null,
+    last_whatsapp_status: o.last_whatsapp_status || null,
+    lastWhatsappSentAt: o.last_whatsapp_sent_at || null,
+    emailSentCount: Number(o.email_sent_count || 0),
+    email_sent_count: Number(o.email_sent_count || 0),
+    lastEmailStatus: o.last_email_status || null,
+    last_email_status: o.last_email_status || null,
+    lastEmailSentAt: o.last_email_sent_at || null,
     items: Array.isArray(parsedItems) ? parsedItems : [],
     totalAmount: Number(o.total_amount || 0),
     total_amount: Number(o.total_amount || 0),
@@ -583,6 +594,34 @@ router.put("/orders/:id", async (req, res) => {
       Prefer: "return=representation",
     });
     const order = mapOrderForErp(updated[0] || { id: orderId, ...body });
+
+    // Automated live status email dispatch to customer if email is available
+    if (body.status && updated?.[0]) {
+      (async () => {
+        try {
+          const ord = updated[0];
+          let targetEmail = ord.customer_email || body.customerEmail || body.email;
+          if (!targetEmail && ord.customer_phone) {
+            const cust = await fetchCustomerByPhone(ord.customer_phone).catch(() => null);
+            if (cust?.email) targetEmail = cust.email;
+          }
+          if (targetEmail && targetEmail.includes("@")) {
+            await sendMsg91OrderStatusEmail({
+              customerEmail: targetEmail,
+              customerName: ord.customer_name || "Valued Customer",
+              orderNumber: ord.order_number || orderId,
+              status: ord.status,
+              dueDate: ord.due_date,
+              pickupDate: ord.pickup_date,
+            });
+            req.log?.info({ orderNumber: ord.order_number, to: targetEmail, status: ord.status }, "Sent automated status update email");
+          }
+        } catch (statusEmailErr) {
+          req.log?.warn(statusEmailErr, "Could not send automated status email");
+        }
+      })();
+    }
+
     return res.json({ success: true, data: order, ...order });
   } catch (err: any) {
     req.log?.error(err, "Failed to update order");
@@ -700,6 +739,36 @@ router.post("/orders", async (req, res) => {
         req.log?.error(walErr, "Failed to debit wallet for full wallet order");
       }
     }
+
+    // Default automated email dispatch on order creation if email exists
+    (async () => {
+      try {
+        let targetEmail = createdOrder.customer_email || body.customerEmail || body.email;
+        if (!targetEmail && (body.customerPhone || createdOrder.customer_phone)) {
+          const cust = await fetchCustomerByPhone(String(body.customerPhone || createdOrder.customer_phone)).catch(() => null);
+          if (cust?.email) targetEmail = cust.email;
+        }
+        if (targetEmail && targetEmail.includes("@")) {
+          const emailRes = await sendMsg91OrderInvoiceEmail({
+            customerEmail: targetEmail,
+            customerName: createdOrder.customer_name || "Valued Customer",
+            orderNumber: createdOrder.order_number || orderNumber,
+            amount: createdOrder.total_amount || totalAmount,
+            invoicePdfUrl: createdOrder.invoice_url,
+          });
+          if (emailRes.success) {
+            await supabaseRequest(`/rest/v1/orders?id=eq.${encodeURIComponent(createdOrder.id)}`, "PATCH", {
+              email_sent_count: 1,
+              last_email_status: "Sent",
+              last_email_sent_at: new Date().toISOString(),
+            }, { Prefer: "return=minimal" }).catch(() => null);
+            req.log?.info({ orderNumber: createdOrder.order_number, to: targetEmail }, "Dispatched default initial invoice email");
+          }
+        }
+      } catch (autoEmailErr) {
+        req.log?.warn(autoEmailErr, "Could not send initial order invoice email");
+      }
+    })();
 
     res.status(201).json(mapOrderForErp(createdOrder));
   } catch (err: any) {
@@ -1101,9 +1170,31 @@ const handleWhatsAppSendBill = async (req: any, res: any) => {
           updated_at: new Date().toISOString(),
         };
         if (pdfUrl) patchData.invoice_url = pdfUrl;
-        await supabaseRequest('/rest/v1/orders?order_number=eq.' + encodeURIComponent(cleanOrderNum), 'PATCH', patchData, {
-          Prefer: 'return=minimal',
-        });
+        
+        let patchRows = await supabaseRequest<any[]>(
+          '/rest/v1/orders?order_number=eq.' + encodeURIComponent(cleanOrderNum),
+          'PATCH',
+          patchData,
+          { Prefer: 'return=representation' }
+        ).catch(() => []);
+
+        if (!patchRows || patchRows.length === 0) {
+          patchRows = await supabaseRequest<any[]>(
+            '/rest/v1/orders?order_number=eq.' + encodeURIComponent('#' + cleanOrderNum),
+            'PATCH',
+            patchData,
+            { Prefer: 'return=representation' }
+          ).catch(() => []);
+        }
+
+        if (!patchRows || patchRows.length === 0) {
+          await supabaseRequest(
+            '/rest/v1/orders?id=eq.' + encodeURIComponent(cleanOrderNum),
+            'PATCH',
+            patchData,
+            { Prefer: 'return=minimal' }
+          ).catch(() => null);
+        }
       } catch (patchErr) {
         req.log?.warn(patchErr, 'Failed to update order whatsapp status in Supabase');
       }
@@ -1135,9 +1226,121 @@ const handleWhatsAppSendBill = async (req: any, res: any) => {
   }
 };
 
+// Email Order Bill Sender
+const handleEmailSendBill = async (req: any, res: any) => {
+  try {
+    const orderRef = String(req.params.id || req.body?.orderId || req.body?.orderNumber || '').trim();
+    const providedEmail = String(req.body?.email || req.body?.customerEmail || '').trim();
+    const customPdfUrl = req.body?.pdfUrl || req.body?.invoiceUrl;
+
+    if (!orderRef) {
+      return res.status(400).json({ success: false, error: 'Order reference is required' });
+    }
+
+    const cleanOrderNum = orderRef.replace(/^#/, '');
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanOrderNum);
+
+    let orderRow: any = null;
+    if (isUuid) {
+      const rows = await supabaseRequest<any[]>(`/rest/v1/orders?id=eq.${encodeURIComponent(cleanOrderNum)}&limit=1`, 'GET').catch(() => []);
+      orderRow = rows?.[0];
+    } else {
+      let rows = await supabaseRequest<any[]>(`/rest/v1/orders?order_number=eq.${encodeURIComponent(cleanOrderNum)}&limit=1`, 'GET').catch(() => []);
+      if (!rows?.[0]) {
+        rows = await supabaseRequest<any[]>(`/rest/v1/orders?order_number=eq.${encodeURIComponent('#' + cleanOrderNum)}&limit=1`, 'GET').catch(() => []);
+      }
+      orderRow = rows?.[0];
+    }
+
+    if (!orderRow) {
+      return res.status(404).json({ success: false, error: 'Order not found' });
+    }
+
+    let targetEmail = providedEmail || orderRow.customer_email;
+    if (!targetEmail && orderRow.customer_phone) {
+      const cust = await fetchCustomerByPhone(orderRow.customer_phone).catch(() => null);
+      if (cust?.email) targetEmail = cust.email;
+    }
+
+    if (!targetEmail || !targetEmail.includes('@')) {
+      return res.status(400).json({
+        success: false,
+        needsEmail: true,
+        error: 'No email address on file for this customer. Please enter their email address.',
+      });
+    }
+
+    // Save provided email to order and customer if changed
+    if (providedEmail && providedEmail.includes('@') && providedEmail !== orderRow.customer_email) {
+      await supabaseRequest(`/rest/v1/orders?id=eq.${encodeURIComponent(orderRow.id)}`, 'PATCH', {
+        customer_email: providedEmail,
+        updated_at: new Date().toISOString(),
+      }, { Prefer: 'return=minimal' }).catch(() => null);
+
+      if (orderRow.customer_id) {
+        await supabaseRequest(`/rest/v1/customers?id=eq.${encodeURIComponent(orderRow.customer_id)}`, 'PATCH', {
+          email: providedEmail,
+          updated_at: new Date().toISOString(),
+        }, { Prefer: 'return=minimal' }).catch(() => null);
+      } else if (orderRow.customer_phone) {
+        await supabaseRequest(`/rest/v1/customers?phone=eq.${encodeURIComponent(orderRow.customer_phone)}`, 'PATCH', {
+          email: providedEmail,
+          updated_at: new Date().toISOString(),
+        }, { Prefer: 'return=minimal' }).catch(() => null);
+      }
+    }
+
+    const publicBillUrl = customPdfUrl || orderRow.invoice_url || (`https://myfabclean.com/trackorder/${encodeURIComponent(orderRow.order_number.replace(/^#/, ''))}`);
+
+    const emailRes = await sendMsg91OrderInvoiceEmail({
+      customerEmail: targetEmail,
+      customerName: orderRow.customer_name || 'Valued Customer',
+      orderNumber: orderRow.order_number,
+      amount: orderRow.total_amount || 0,
+      invoicePdfUrl: publicBillUrl,
+    });
+
+    const currentCount = Number(orderRow.email_sent_count || 0);
+    const newEmailCount = currentCount + (emailRes.success ? 1 : 0);
+
+    await supabaseRequest(`/rest/v1/orders?id=eq.${encodeURIComponent(orderRow.id)}`, 'PATCH', {
+      email_sent_count: newEmailCount,
+      last_email_status: emailRes.success ? 'Sent' : (emailRes.error || 'Failed'),
+      last_email_sent_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { Prefer: 'return=minimal' }).catch(() => null);
+
+    if (!emailRes.success) {
+      return res.status(200).json({
+        success: false,
+        error: emailRes.error || 'Failed to dispatch email via MSG91',
+        newEmailCount,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Tax invoice sent successfully to ${targetEmail}`,
+      email: targetEmail,
+      newEmailCount,
+    });
+  } catch (err: any) {
+    req.log?.error(err, 'Failed to send email bill');
+    return res.status(500).json({
+      success: false,
+      error: err.message || 'Internal server error while sending email',
+    });
+  }
+};
+
 router.post('/whatsapp/send-bill', handleWhatsAppSendBill);
 router.post('/api/whatsapp/send-bill', handleWhatsAppSendBill);
 router.post('/whatsapp/send-invoice', handleWhatsAppSendBill);
 router.post('/api/whatsapp/send-invoice', handleWhatsAppSendBill);
+
+router.post('/orders/:id/send-email-bill', handleEmailSendBill);
+router.post('/api/orders/:id/send-email-bill', handleEmailSendBill);
+router.post('/orders/send-email-bill', handleEmailSendBill);
+router.post('/api/orders/send-email-bill', handleEmailSendBill);
 
 export default router;

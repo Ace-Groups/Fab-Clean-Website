@@ -701,3 +701,123 @@ function escapeHtml(value: unknown): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+/**
+ * Dispatches live Order Status Update Notification via MSG91 Email
+ */
+export async function sendMsg91OrderStatusEmail(params: {
+  customerEmail: string;
+  customerName?: string;
+  orderNumber: string;
+  status: string;
+  pickupDate?: string | Date;
+  dueDate?: string | Date;
+  invoicePdfUrl?: string;
+}): Promise<Msg91EmailResult> {
+  const customerName = params.customerName || "Valued Customer";
+  const cleanOrder = params.orderNumber.replace(/#/g, "");
+  const statusLabels: Record<string, string> = {
+    pending: "Booked & Pending Intake",
+    in_transit: "In Transit to Facility",
+    processing: "In Facility Care & Cleaning",
+    ready_for_delivery: "Ready for Delivery / Store Pickup",
+    completed: "Delivered & Completed",
+    cancelled: "Order Cancelled",
+  };
+  const statusDisplay = statusLabels[params.status.toLowerCase()] || params.status;
+  const dueDateStr = params.dueDate ? formatDate(params.dueDate) : "On Schedule";
+  const trackingUrl = `https://myfabclean.com/trackorder/${cleanOrder}`;
+
+  const subject = `Order #${cleanOrder} Update: ${statusDisplay} | Fab Clean`;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Order Status Update - #${escapeHtml(cleanOrder)}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #111827;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding: 40px 15px; background-color: #f3f4f6;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.06); border: 1px solid #e5e7eb;">
+          <tr>
+            <td style="height: 4px; background-color: #059669;"></td>
+          </tr>
+          <tr>
+            <td style="padding: 32px 40px 16px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td>
+                    <div style="font-size: 22px; font-weight: 900; color: #111827; letter-spacing: -0.5px;">🧺 FAB CLEAN</div>
+                    <div style="font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.8px; margin-top: 2px;">Premium Garment Care &amp; Laundry</div>
+                  </td>
+                  <td align="right">
+                    <div style="font-size: 13px; font-weight: 800; color: #059669; background: #ecfdf5; padding: 4px 10px; border-radius: 4px; display: inline-block;">ORDER #${escapeHtml(cleanOrder)}</div>
+                  </td>
+                </tr>
+              </table>
+              <div style="font-size: 16px; font-weight: 800; color: #111827; text-transform: uppercase; margin-top: 18px;">GARMENT CARE STATUS UPDATE</div>
+              <div style="font-size: 14px; font-weight: 500; color: #4b5563; margin-top: 6px; padding-bottom: 20px; border-bottom: 1px solid #e5e7eb;">Live updates on your garment processing stages</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 10px 40px 28px;">
+              <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 16px 20px; margin-bottom: 24px;">
+                <div style="font-size: 12px; font-weight: 700; color: #15803d; text-transform: uppercase; letter-spacing: 0.5px;">Current Workflow Stage</div>
+                <div style="font-size: 18px; font-weight: 800; color: #166534; margin-top: 4px;">${escapeHtml(statusDisplay)}</div>
+              </div>
+
+              <table width="100%" cellpadding="0" cellspacing="0" style="font-size: 13.5px; line-height: 2.2;">
+                <tr>
+                  <td width="42%" style="color: #6b7280; font-weight: 400;">Customer</td>
+                  <td width="58%" style="color: #111827; font-weight: 700;">${escapeHtml(customerName)}</td>
+                </tr>
+                <tr>
+                  <td style="color: #6b7280; font-weight: 400;">Expected Delivery</td>
+                  <td style="color: #111827; font-weight: 700;">${escapeHtml(dueDateStr)}</td>
+                </tr>
+              </table>
+
+              <div style="margin-top: 26px; text-align: center;">
+                <a href="${escapeHtml(trackingUrl)}" target="_blank" rel="noopener noreferrer" style="display: inline-block; background-color: #059669; color: #ffffff; padding: 12px 28px; border-radius: 6px; font-weight: 700; font-size: 14px; text-decoration: none;">
+                  🔍 Live Garment Tracking
+                </a>
+              </div>
+              <div style="margin-top: 12px; text-align: center;">
+                <a href="https://app.myfabclean.com" target="_blank" rel="noopener noreferrer" style="display: inline-block; color: #059669; font-weight: 600; font-size: 12.5px; text-decoration: underline;">
+                  View order &amp; download invoice in Customer Portal &rarr;
+                </a>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="border-top: 1px solid #e5e7eb; padding: 16px 40px; font-size: 12px; color: #9ca3af;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td>Fab Clean Support: +91 93630 59595</td>
+                  <td align="right">
+                    <a href="${ACE_DIGITAL_URL}" target="_blank" rel="noopener noreferrer" style="color: #4b5563; text-decoration: none; font-weight: 500;">
+                      Powered by Ace Digital ↗
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  return sendMsg91Email({
+    to: { name: customerName, email: params.customerEmail },
+    subject,
+    html,
+    domain: process.env.MSG91_EMAIL_DOMAIN || DEFAULT_DOMAIN,
+    fromEmail: process.env.MSG91_FROM_EMAIL || DEFAULT_FROM_EMAIL,
+    fromName: "FAB CLEAN",
+  });
+}
