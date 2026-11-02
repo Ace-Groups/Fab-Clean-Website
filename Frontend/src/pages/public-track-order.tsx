@@ -239,8 +239,8 @@ const toTitleCase = (value?: string) =>
     .replace(/\b\w/g, (char) => char.toUpperCase());
 
 const getGreetingName = (value?: string) => {
-  const first = String(value || 'Guest').trim().split(/\s+/)[0];
-  return first || 'Guest';
+  const name = String(value || 'Guest').trim();
+  return name || 'Guest';
 };
 
 const getPaymentBadgeClass = (status?: string) =>

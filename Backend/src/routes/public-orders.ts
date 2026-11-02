@@ -32,9 +32,7 @@ function buildStages(status: string) {
 
 const maskName = (name?: string | null) => {
   if (!name) return undefined;
-  const parts = String(name).trim().split(/\s+/);
-  if (parts.length === 1) return `${parts[0].slice(0, 3)}…`;
-  return `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`;
+  return String(name).trim();
 };
 
 // Public tracking endpoint matching ERP structure for public-order-tracking component
