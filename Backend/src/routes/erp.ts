@@ -1343,4 +1343,170 @@ router.post('/api/orders/:id/send-email-bill', handleEmailSendBill);
 router.post('/orders/send-email-bill', handleEmailSendBill);
 router.post('/api/orders/send-email-bill', handleEmailSendBill);
 
+// ==========================================
+// 8. APP & WEBSITE MANAGEMENT ROUTES (SUPER ADMIN)
+// ==========================================
+
+// Get Account Deletion Requests from Supabase settings
+router.get(['/erp/account-deletion-requests', '/api/erp/account-deletion-requests'], async (req, res) => {
+  try {
+    const rows = await supabaseRequest<any[]>('/rest/v1/settings?category=eq.account_deletion&order=updated_at.desc', 'GET').catch(() => []);
+    const items = rows.map((r) => {
+      try {
+        const parsed = JSON.parse(r.value);
+        return {
+          settingKey: r.key,
+          updatedAt: r.updated_at,
+          ...parsed,
+        };
+      } catch {
+        return {
+          settingKey: r.key,
+          updatedAt: r.updated_at,
+          raw: r.value,
+        };
+      }
+    });
+    res.json({ success: true, count: items.length, data: items });
+  } catch (err: any) {
+    req.log?.error(err, 'Failed to fetch deletion requests');
+    res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+
+// Update Deletion Request Status (Approve/Erase, Retain, Dismiss)
+router.post(['/erp/account-deletion-requests/:key/action', '/api/erp/account-deletion-requests/:key/action'], async (req, res) => {
+  try {
+    const key = req.params.key;
+    const { action, adminNotes } = req.body || {};
+
+    const rows = await supabaseRequest<any[]>(`/rest/v1/settings?key=eq.${encodeURIComponent(key)}&limit=1`, 'GET').catch(() => []);
+    if (!rows?.[0]) {
+      return res.status(404).json({ success: false, error: 'Request not found' });
+    }
+
+    let parsed: any = {};
+    try {
+      parsed = JSON.parse(rows[0].value);
+    } catch (_) {}
+
+    const newStatus = action === 'approve_delete' ? 'approved_deleted' : action === 'retain' ? 'retained' : action === 'contacted' ? 'customer_contacted' : 'dismissed';
+    parsed.status = newStatus;
+    parsed.adminNotes = adminNotes || parsed.adminNotes || '';
+    parsed.processedAt = new Date().toISOString();
+
+    if (action === 'approve_delete' && parsed.customerPhone) {
+      const cleanPhone = parsed.customerPhone;
+      await supabaseRequest(`/rest/v1/customers?phone=ilike.*${encodeURIComponent(cleanPhone.slice(-10))}*`, 'PATCH', {
+        name: 'Deleted Customer',
+        phone: '0000000000',
+        email: null,
+        status: 'deleted',
+        notes: `Account deleted per DPDP request. Survey: ${parsed.reason}`,
+      }).catch(() => null);
+    }
+
+    await supabaseRequest(`/rest/v1/settings?key=eq.${encodeURIComponent(key)}`, 'PATCH', {
+      value: JSON.stringify(parsed),
+      updated_at: new Date().toISOString(),
+      updated_by: 'erp_admin',
+    }, { Prefer: 'return=minimal' });
+
+    res.json({ success: true, message: `Request updated to ${newStatus}`, data: parsed });
+  } catch (err: any) {
+    req.log?.error(err, 'Failed to update deletion request');
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Referral Program & Statistics for App Management Hub
+router.get(['/erp/app-management/referrals', '/api/erp/app-management/referrals'], async (req, res) => {
+  try {
+    const rows = await supabaseRequest<any[]>('/rest/v1/portal_referrals?select=*&order=created_at.desc&limit=100', 'GET').catch(() => []);
+    const settingsRows = await supabaseRequest<any[]>('/rest/v1/settings?category=eq.app_config&key=eq.referral_program&limit=1', 'GET').catch(() => []);
+    let config = { referrerBonus: 50, refereeBonus: 25, isActive: true };
+    if (settingsRows?.[0]?.value) {
+      try { config = JSON.parse(settingsRows[0].value); } catch (_) {}
+    }
+
+    const totalRewardsCredited = rows.reduce((sum, r) => sum + (Number(r.referrer_reward) || 0) + (Number(r.referee_reward) || 0), 0);
+    const uniqueReferrers = new Set(rows.map(r => r.referrer_phone).filter(Boolean)).size;
+
+    res.json({
+      success: true,
+      config,
+      stats: {
+        totalReferrals: rows.length,
+        uniqueReferrers,
+        totalRewardsCredited,
+      },
+      data: rows,
+    });
+  } catch (err: any) {
+    req.log?.error(err, 'Failed to fetch referrals');
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// App & Website Banners Management
+router.get(['/erp/app-management/banners', '/api/erp/app-management/banners'], async (req, res) => {
+  try {
+    const rows = await supabaseRequest<any[]>('/rest/v1/settings?category=eq.app_banner', 'GET').catch(() => []);
+    let banners = rows.map(r => {
+      try { return JSON.parse(r.value); } catch { return null; }
+    }).filter(Boolean);
+
+    if (banners.length === 0) {
+      banners = [
+        {
+          id: 'diwali_special_50',
+          title: 'Diwali Special: 50% OFF on All Dry Cleaning Services',
+          subtitle: 'Relax this Diwali... Let us take care of your special garments! Use Code FABDIWALI',
+          code: 'FABDIWALI',
+          discountPercent: 50,
+          badge: 'DIWALI SPECIAL 50% OFF',
+          imageUrl: '/diwali-special.jpg',
+          validTill: '5 Nov 2026',
+          isActive: true,
+          target: 'both',
+        },
+      ];
+    }
+
+    res.json({ success: true, banners });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, banners: [] });
+  }
+});
+
+router.post(['/erp/app-management/banners', '/api/erp/app-management/banners'], async (req, res) => {
+  try {
+    const { banner } = req.body || {};
+    if (!banner?.id) return res.status(400).json({ success: false, error: 'Banner ID is required' });
+
+    await supabaseRequest('/rest/v1/settings', 'POST', {
+      key: `banner_${banner.id}`,
+      value: JSON.stringify(banner),
+      category: 'app_banner',
+      updated_at: new Date().toISOString(),
+      updated_by: 'erp_admin',
+    }, { Prefer: 'resolution=merge-duplicates' });
+
+    res.json({ success: true, message: 'Banner updated successfully', banner });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Website Public Enquiries from contacts table
+router.get(['/erp/website-management/enquiries', '/api/erp/website-management/enquiries'], async (req, res) => {
+  try {
+    const rows = await supabaseRequest<any[]>('/rest/v1/contacts?select=*&order=created_at.desc&limit=100', 'GET').catch(() => []);
+    res.json({ success: true, count: rows.length, data: rows });
+  } catch (err: any) {
+    req.log?.error(err, 'Failed to fetch contact inquiries');
+    res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+
 export default router;

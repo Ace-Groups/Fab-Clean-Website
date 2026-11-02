@@ -1,5 +1,6 @@
 import { FAB_CLEAN_LOGO_BASE64 } from "../assets/logo-base64.js";
 import { Router, type IRouter } from "express";
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { db, pool } from "@workspace/db";
 import { pickupsTable, usersTable } from "@workspace/db";
@@ -1103,6 +1104,223 @@ router.delete("/users/profile", requireAuth, async (req, res) => {
       success: false,
       error: { code: "INTERNAL_ERROR", message: "Failed to delete account. Please try again." },
     });
+  }
+});
+
+/**
+ * POST /api/users/onboarding
+ * Collects mandatory name, optional email, address, GST profile, and referral code for new users
+ */
+router.post("/users/onboarding", requireAuth, async (req, res) => {
+  try {
+    const userId = req.authUser!.userId;
+    const phone = req.authUser!.phone || "";
+    const { name, email, address, gstNumber, referralCode } = req.body || {};
+
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: "VALIDATION_ERROR", message: "Full Name is required" },
+      });
+    }
+
+    const cleanName = String(name).trim();
+    const cleanEmail = email ? String(email).trim().toLowerCase() : undefined;
+    const cleanGst = gstNumber ? String(gstNumber).trim().toUpperCase() : undefined;
+    const cleanAddress = address ? String(address).trim() : undefined;
+
+    // 1. Fetch existing customer record
+    const customer = await fetchCustomerByPhone(phone).catch(() => null);
+
+    let currentAddresses: string[] = [];
+    if (customer?.address) {
+      if (typeof customer.address === "string") {
+        try {
+          const parsed = JSON.parse(customer.address);
+          if (Array.isArray(parsed?.addresses)) currentAddresses = parsed.addresses;
+        } catch (_) {}
+      } else if (Array.isArray(customer.address?.addresses)) {
+        currentAddresses = customer.address.addresses;
+      }
+    }
+
+    if (cleanAddress && !currentAddresses.includes(cleanAddress)) {
+      currentAddresses = [cleanAddress, ...currentAddresses];
+    }
+
+    const addressPayload = {
+      street: cleanAddress || "",
+      addresses: currentAddresses,
+      gst_number: cleanGst || customer?.gst_number || "",
+    };
+
+    const customerPatch: Record<string, any> = {
+      name: cleanName,
+      address: addressPayload,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (cleanEmail) customerPatch.email = cleanEmail;
+    if (cleanGst) customerPatch.gst_number = cleanGst;
+
+    if (customer?.id) {
+      await supabaseRequest(`/rest/v1/customers?id=eq.${encodeURIComponent(customer.id)}`, "PATCH", customerPatch, {
+        Prefer: "return=representation",
+      }).catch(() => null);
+    } else {
+      await supabaseRequest("/rest/v1/customers", "POST", {
+        phone,
+        ...customerPatch,
+      }).catch(() => null);
+    }
+
+    // 2. Also update website_users
+    await db.update(usersTable).set({
+      name: cleanName,
+      ...(cleanEmail ? { email: cleanEmail } : {}),
+      updatedAt: new Date(),
+    }).where(eq(usersTable.id, userId)).catch(() => null);
+
+    // 3. Handle optional referral code if provided
+    let referralApplied = false;
+    let referralMessage = "";
+    if (referralCode && String(referralCode).trim()) {
+      try {
+        const cleanRef = String(referralCode).trim().toUpperCase();
+        const candidateUsers = await db.select().from(usersTable).where(eq(usersTable.referralCode, cleanRef)).limit(1).catch(() => []);
+        const referrer = candidateUsers?.[0];
+
+        if (referrer && referrer.phone !== phone) {
+          await supabaseRequest("/rest/v1/portal_referrals", "POST", {
+            referrer_user_id: referrer.id,
+            referrer_phone: referrer.phone,
+            referee_phone: phone,
+            referral_code: cleanRef,
+            referrer_reward: 50,
+            referee_reward: 25,
+            status: "pending_first_order",
+          }).catch(() => null);
+
+          referralApplied = true;
+          referralMessage = `Referral code ${cleanRef} applied! You will receive ₹25 bonus on your first order.`;
+        }
+      } catch (refErr) {
+        req.log.warn({ refErr }, "Could not process referral in onboarding");
+      }
+    }
+
+    res.json({
+      success: true,
+      message: "Profile personalized successfully!",
+      referralApplied,
+      referralMessage,
+      user: {
+        id: userId,
+        name: cleanName,
+        phone,
+        email: cleanEmail,
+        gstNumber: cleanGst,
+        addresses: currentAddresses,
+      },
+    });
+  } catch (err: any) {
+    req.log.error(err, "Onboarding submission failed");
+    res.status(500).json({
+      success: false,
+      error: { code: "INTERNAL_ERROR", message: err.message || "Failed to save profile" },
+    });
+  }
+});
+
+/**
+ * POST /api/users/delete-request
+ * Logs customer account deletion request and exit survey for Super Admin review
+ */
+router.post("/users/delete-request", requireAuth, async (req, res) => {
+  try {
+    const userId = req.authUser!.userId;
+    const phone = req.authUser!.phone || "";
+    const { reason, feedback } = req.body || {};
+
+    if (!reason || !String(reason).trim()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: "VALIDATION_ERROR", message: "Please select a reason for account deletion" },
+      });
+    }
+
+    const customer = await fetchCustomerByPhone(phone).catch(() => null);
+    const orders = await fetchOrdersByPhone(phone).catch(() => []);
+    const walletBalance = Number(customer?.wallet_balance_cache || 0);
+
+    const deletionPayload = {
+      id: crypto.randomUUID(),
+      userId,
+      customerId: customer?.id || null,
+      customerPhone: phone,
+      customerName: customer?.name || "Customer",
+      customerEmail: customer?.email || null,
+      reason: String(reason).trim(),
+      feedback: feedback ? String(feedback).trim() : "",
+      walletBalance,
+      ordersCount: orders.length,
+      status: "pending_review",
+      requestedAt: new Date().toISOString(),
+    };
+
+    const settingKey = `del_req_${phone.replace(/\D/g, "").slice(-10)}`;
+    await supabaseRequest("/rest/v1/settings", "POST", {
+      key: settingKey,
+      value: JSON.stringify(deletionPayload),
+      category: "account_deletion",
+      updated_at: new Date().toISOString(),
+      updated_by: "customer_portal",
+    }, {
+      Prefer: "resolution=merge-duplicates",
+    });
+
+    req.log.info({ phone, reason }, "Logged customer account deletion request in Super Admin ledger");
+
+    res.json({
+      success: true,
+      message: "Your account deletion request has been registered. Our concierge team will review and process your request within 24-48 hours.",
+      data: deletionPayload,
+    });
+  } catch (err: any) {
+    req.log.error(err, "Failed to log account deletion request");
+    res.status(500).json({
+      success: false,
+      error: { code: "INTERNAL_ERROR", message: err.message || "Failed to submit deletion request" },
+    });
+  }
+});
+
+/**
+ * GET /api/app/promotions
+ * Returns active app promotional posters and campaigns
+ */
+router.get("/app/promotions", async (req, res) => {
+  try {
+    const defaultPromotions = [
+      {
+        id: "diwali_special_50",
+        title: "Diwali Special: 50% OFF on All Dry Cleaning Services",
+        subtitle: "Relax this Diwali... Let us take care of your special garments! Use Code FABDIWALI",
+        code: "FABDIWALI",
+        discountPercent: 50,
+        badge: "DIWALI SPECIAL 50% OFF",
+        imageUrl: "/diwali-special.jpg",
+        validTill: "5 Nov 2026",
+        isActive: true,
+      },
+    ];
+
+    res.json({
+      success: true,
+      banners: defaultPromotions,
+    });
+  } catch (err: any) {
+    res.json({ success: true, banners: [] });
   }
 });
 
