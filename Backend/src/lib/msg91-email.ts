@@ -559,6 +559,130 @@ export async function sendMsg91PaymentFailedEmail(params: {
   });
 }
 
+/**
+ * Dispatches Order Invoice / Bill via MSG91 Email from dobi@mail.myfabclean.com
+ */
+export async function sendMsg91OrderInvoiceEmail(params: {
+  customerEmail: string;
+  customerName?: string;
+  orderNumber: string;
+  amount: number | string;
+  invoicePdfUrl?: string;
+  date?: string | Date;
+}): Promise<Msg91EmailResult> {
+  const customerName = params.customerName || "Valued Customer";
+  const amountStr = Number(params.amount || 0).toFixed(2);
+  const dateStr = formatDate(params.date);
+  const cleanOrder = params.orderNumber.replace(/#/g, "");
+  const invoiceUrl = params.invoicePdfUrl || `https://myfabclean.com/trackorder/${cleanOrder}`;
+
+  const subject = `Tax Invoice & Garment Care Bill for Order #${cleanOrder} | Fab Clean`;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Tax Invoice - #${escapeHtml(cleanOrder)}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #111827;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding: 40px 15px; background-color: #f3f4f6;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.06); border: 1px solid #e5e7eb;">
+          <tr>
+            <td style="height: 4px; background-color: #059669;"></td>
+          </tr>
+          <tr>
+            <td style="padding: 32px 40px 16px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td>
+                    <div style="font-size: 22px; font-weight: 900; color: #111827; letter-spacing: -0.5px;">🧺 FAB CLEAN</div>
+                    <div style="font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.8px; margin-top: 2px;">Premium Garment Care &amp; Laundry</div>
+                  </td>
+                  <td align="right">
+                    <div style="font-size: 13px; font-weight: 800; color: #059669; background: #ecfdf5; padding: 4px 10px; border-radius: 4px; display: inline-block;">ORDER #${escapeHtml(cleanOrder)}</div>
+                  </td>
+                </tr>
+              </table>
+              <div style="font-size: 16px; font-weight: 800; color: #111827; text-transform: uppercase; margin-top: 18px;">YOUR TAX INVOICE &amp; BILL</div>
+              <div style="font-size: 14px; font-weight: 500; color: #4b5563; margin-top: 6px; padding-bottom: 20px; border-bottom: 1px solid #e5e7eb;">Thank you for trusting Fab Clean with your garment care</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 10px 40px 28px;">
+              <table width="100%" cellpadding="0" cellspacing="0" style="font-size: 13.5px; line-height: 2.2;">
+                <tr>
+                  <td width="42%" style="color: #6b7280; font-weight: 400;">Billed To</td>
+                  <td width="58%" style="color: #111827; font-weight: 700;">${escapeHtml(customerName)}</td>
+                </tr>
+                <tr>
+                  <td style="color: #6b7280; font-weight: 400;">Total Bill Amount</td>
+                  <td style="color: #111827; font-weight: 800; font-family: monospace; font-size: 16px;">₹${escapeHtml(amountStr)}</td>
+                </tr>
+                <tr>
+                  <td style="color: #6b7280; font-weight: 400;">Order Date</td>
+                  <td style="color: #111827; font-weight: 400;">${escapeHtml(dateStr)}</td>
+                </tr>
+                <tr>
+                  <td style="color: #6b7280; font-weight: 400;">Order Number</td>
+                  <td style="color: #111827; font-weight: 700; font-family: monospace;">#${escapeHtml(cleanOrder)}</td>
+                </tr>
+              </table>
+
+              <div style="margin-top: 26px; text-align: center;">
+                <a href="${escapeHtml(invoiceUrl)}" target="_blank" rel="noopener noreferrer" style="display: inline-block; background-color: #059669; color: #ffffff; padding: 12px 28px; border-radius: 6px; font-weight: 700; font-size: 14px; text-decoration: none;">
+                  📄 View &amp; Download Invoice PDF
+                </a>
+              </div>
+              <div style="margin-top: 12px; text-align: center;">
+                <a href="https://app.myfabclean.com" target="_blank" rel="noopener noreferrer" style="display: inline-block; color: #059669; font-weight: 600; font-size: 12.5px; text-decoration: underline;">
+                  Track order progress in Customer Portal &rarr;
+                </a>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="border-top: 1px solid #e5e7eb; padding: 16px 40px; font-size: 12px; color: #9ca3af;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td>Fab Clean Support: +91 93630 59595</td>
+                  <td align="right">
+                    <a href="${ACE_DIGITAL_URL}" target="_blank" rel="noopener noreferrer" style="color: #4b5563; text-decoration: none; font-weight: 500;">
+                      Powered by Ace Digital ↗
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  return sendMsg91Email({
+    to: { name: customerName, email: params.customerEmail },
+    subject,
+    html,
+    templateId: process.env.MSG91_EMAIL_INVOICE_TEMPLATE_ID || "template_23_03_2026_20_03_4",
+    variables: {
+      customer_name: customerName,
+      order_number: cleanOrder,
+      amount: amountStr,
+      date: dateStr,
+      company_name: "FAB CLEAN",
+      invoice_url: invoiceUrl,
+      receipt_url: invoiceUrl,
+    },
+    domain: process.env.MSG91_EMAIL_DOMAIN || DEFAULT_DOMAIN,
+    fromEmail: process.env.MSG91_FROM_EMAIL || DEFAULT_FROM_EMAIL,
+    fromName: "FAB CLEAN",
+  });
+}
+
 function formatDate(dateValue?: string | Date): string {
   const d = dateValue ? new Date(dateValue) : new Date();
   if (Number.isNaN(d.getTime())) return "29 Oct, 2026";

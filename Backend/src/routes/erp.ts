@@ -9,9 +9,10 @@ function normalizeStoreCode(raw: any): string {
 }
 import { Router, type IRouter } from "express";
 import crypto from "crypto";
-import { supabaseRequest } from "../lib/supabase-admin.js";
+import { supabaseRequest, fetchCustomerByPhone } from "../lib/supabase-admin.js";
 import { recordOrderCreditDebit, recordWalletPaymentDebit } from "../lib/wallet-engine.js";
 import { isR2Configured, uploadPublicObject } from "../lib/r2.js";
+import { sendMsg91OrderInvoiceEmail } from "../lib/msg91-email.js";
 
 const router: IRouter = Router();
 
@@ -1049,6 +1050,47 @@ const handleWhatsAppSendBill = async (req: any, res: any) => {
 
     const msg91Res: any = await response.json().catch(() => ({}));
     const newSendCount = Number(sendCount) + 1;
+
+    // Dispatches invoice email from dobi@mail.myfabclean.com if customer has an email
+    try {
+      let targetEmail = req.body?.customerEmail || req.body?.email;
+      if (!targetEmail && cleanOrderNum) {
+        const orderRows = await supabaseRequest<any[]>(
+          `/rest/v1/orders?order_number=eq.${encodeURIComponent(cleanOrderNum)}&select=customer_email,customer_phone`,
+          'GET'
+        ).catch(() => []);
+        if (orderRows?.[0]?.customer_email) {
+          targetEmail = orderRows[0].customer_email;
+        } else if (orderRows?.[0]?.customer_phone) {
+          const cust = await fetchCustomerByPhone(orderRows[0].customer_phone).catch(() => null);
+          if (cust?.email) targetEmail = cust.email;
+        }
+      }
+      if (!targetEmail && (customerPhone || secondaryPhone)) {
+        const cust = await fetchCustomerByPhone(String(customerPhone || secondaryPhone)).catch(() => null);
+        if (cust?.email) targetEmail = cust.email;
+      }
+
+      if (targetEmail && targetEmail.includes('@')) {
+        sendMsg91OrderInvoiceEmail({
+          customerEmail: targetEmail,
+          customerName: customerName || 'Valued Customer',
+          orderNumber: cleanOrderNum,
+          amount: amount || 0,
+          invoicePdfUrl: publicBillUrl,
+        }).then((emailRes) => {
+          if (emailRes.success) {
+            req.log?.info({ orderNumber: cleanOrderNum, to: targetEmail }, 'Dispatched invoice email from dobi@mail.myfabclean.com');
+          } else {
+            req.log?.warn({ orderNumber: cleanOrderNum, err: emailRes.error }, 'Failed dispatching invoice email');
+          }
+        }).catch((err) => {
+          req.log?.warn(err, 'Error in sendMsg91OrderInvoiceEmail');
+        });
+      }
+    } catch (emailLookupErr) {
+      req.log?.warn(emailLookupErr, 'Email dispatch lookup error');
+    }
 
     if (cleanOrderNum) {
       try {
