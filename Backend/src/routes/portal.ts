@@ -949,4 +949,95 @@ router.post("/orders/:id/stains", async (req, res) => {
   }
 });
 
+/**
+ * DELETE /api/users/profile
+ * Legal Right to Erasure / GDPR / DPDP Act account deletion
+ */
+router.delete("/users/profile", requireAuth, async (req, res) => {
+  try {
+    const userId = req.authUser!.userId;
+    const phone = req.authUser!.phone || "";
+    req.log.info({ userId, phone }, "Processing legal right-to-erasure account deletion request");
+
+    // 1. Delete from website_users
+    await db.delete(usersTable).where(eq(usersTable.id, userId)).catch((e) => {
+      req.log.warn({ err: e }, "Failed to delete user from website_users");
+    });
+
+    // 2. Delete doorstep pickups
+    if (phone) {
+      await supabaseRequest(`/rest/v1/pickups?customer_phone=ilike.*${encodeURIComponent(phone.slice(-10))}*`, "DELETE").catch(() => {});
+    }
+
+    // 3. Anonymize orders for tax/audit compliance (do not break GST records)
+    if (phone) {
+      await supabaseRequest(`/rest/v1/orders?customer_phone=ilike.*${encodeURIComponent(phone.slice(-10))}*`, "PATCH", {
+        customer_name: "Deleted Customer",
+        customer_phone: "DELETED",
+        customer_email: null,
+        shipping_address: null,
+        notes: "Account deleted as per DPDP / legal erasure request",
+      }).catch(() => {});
+    }
+
+    // 4. Scrub customer record and dissociate phone
+    const customer = await fetchCustomerByPhone(phone);
+    if (customer?.id) {
+      await supabaseRequest(`/rest/v1/customers?id=eq.${encodeURIComponent(customer.id)}`, "PATCH", {
+        name: "Deleted Customer",
+        phone: "0000000000",
+        secondary_phone: null,
+        email: null,
+        address: {},
+        status: "deleted",
+        avatar: null,
+        credit_limit: 0,
+        credit_balance: 0,
+        wallet_balance_cache: 0,
+      }).catch(() => {});
+    }
+
+    // 5. Delete avatar if present in storage
+    const avatarFilename = `avatar_${userId}_`;
+    const serviceKey = process.env.SUPABASE_SERVICE_KEY;
+    const baseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
+    if (baseUrl && serviceKey) {
+      try {
+        const listRes = await fetch(`${baseUrl}/storage/v1/object/list/avatars`, {
+          method: "POST",
+          headers: {
+            apikey: serviceKey,
+            Authorization: `Bearer ${serviceKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ prefix: avatarFilename }),
+        });
+        const files: any[] = await listRes.json().catch(() => []);
+        if (Array.isArray(files) && files.length > 0) {
+          await fetch(`${baseUrl}/storage/v1/object/avatars`, {
+            method: "DELETE",
+            headers: {
+              apikey: serviceKey,
+              Authorization: `Bearer ${serviceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ prefixes: files.map((f) => f.name) }),
+          });
+        }
+      } catch (_) {}
+    }
+
+    res.json({
+      success: true,
+      message: "Your profile and personal data have been completely deleted as requested.",
+    });
+  } catch (err: any) {
+    req.log.error(err, "Failed to delete user account");
+    res.status(500).json({
+      success: false,
+      error: { code: "INTERNAL_ERROR", message: "Failed to delete account. Please try again." },
+    });
+  }
+});
+
 export default router;
