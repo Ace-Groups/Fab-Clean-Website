@@ -107,6 +107,7 @@ export type CustomerRecord = {
   name: string | null;
   email: string | null;
   phone: string | null;
+  secondary_phone?: string | null;
   address: string | Record<string, unknown> | null;
   wallet_balance_cache?: number | string | null;
   credit_balance?: number | string | null;
@@ -209,7 +210,7 @@ export async function fetchCustomerByPhone(phone: string): Promise<CustomerRecor
 
   for (const candidate of candidates) {
     const rows = await request<CustomerRecord[]>(
-      `/rest/v1/customers?select=id,name,email,phone,address,wallet_balance_cache,credit_balance,total_orders,total_spent,created_at&or=(phone.eq.${encodeIdentifier(candidate)},secondary_phone.eq.${encodeIdentifier(candidate)})&limit=1`,
+      `/rest/v1/customers?select=id,name,email,phone,secondary_phone,address,wallet_balance_cache,credit_balance,total_orders,total_spent,created_at&or=(phone.eq.${encodeIdentifier(candidate)},secondary_phone.eq.${encodeIdentifier(candidate)})&limit=1`,
       "GET",
     );
     if (rows[0]) return rows[0];
@@ -238,14 +239,20 @@ export async function fetchOrdersByPhone(phone: string): Promise<PublicOrderReco
     "id,order_number,customer_id,customer_name,customer_phone,status,payment_status,total_amount,items,fulfillment_type,pickup_date,invoice_url,created_at,updated_at,rating,feedback,ai_category,ai_sentiment,ai_score";
 
   const candidates = phoneCandidates(cleanPhone);
+  if (customer?.phone) {
+    candidates.push(...phoneCandidates(customer.phone));
+  }
   if (customer?.secondary_phone) {
     candidates.push(...phoneCandidates(customer.secondary_phone));
   }
-  const filterList: string[] = candidates.map(
+  const filterList: string[] = Array.from(new Set(candidates)).map(
     (candidate) => `customer_phone.eq.${encodeIdentifier(candidate)}`,
   );
   if (customer?.id) {
     filterList.push(`customer_id.eq.${encodeIdentifier(customer.id)}`);
+  }
+  if (customer?.email) {
+    filterList.push(`customer_email.eq.${encodeIdentifier(customer.email)}`);
   }
   const orCondition = filterList.join(",");
 

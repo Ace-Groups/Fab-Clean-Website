@@ -1,3 +1,12 @@
+
+function normalizeStoreCode(raw: any): string {
+  const s = String(raw || "").trim().toUpperCase();
+  if (s.includes("POL") || s.includes("POLLACHI") || s.includes("SULEESH")) return "POL";
+  if (s.includes("KIN") || s.includes("KINATHU")) return "KIN";
+  if (s.includes("MCET")) return "MCET";
+  if (s.includes("UDM") || s.includes("UDUMAL")) return "UDM";
+  return "POL";
+}
 import { Router, type IRouter } from "express";
 import crypto from "crypto";
 import { supabaseRequest } from "../lib/supabase-admin.js";
@@ -15,6 +24,10 @@ function mapCustomer(c: any) {
     }
   }
 
+  const gst = parsedAddress?.gstNumber || parsedAddress?.gst_number || c.gst_number || c.gstNumber || "";
+  const avatar = parsedAddress?.avatarUrl || parsedAddress?.avatar_url || c.avatar_url || c.avatarUrl || "";
+  const addressList = Array.isArray(parsedAddress?.addresses) ? parsedAddress.addresses : [];
+
   return {
     ...c,
     id: c.id,
@@ -24,6 +37,11 @@ function mapCustomer(c: any) {
     secondaryPhone: c.secondary_phone || "",
     secondary_phone: c.secondary_phone || "",
     address: parsedAddress || {},
+    gstNumber: gst || undefined,
+    gst_number: gst || undefined,
+    avatarUrl: avatar || undefined,
+    avatar_url: avatar || undefined,
+    addresses: addressList,
     totalOrders: Number(c.total_orders || 0),
     total_orders: Number(c.total_orders || 0),
     totalSpent: Number(c.total_spent || 0),
@@ -226,17 +244,37 @@ router.get("/customers/:id/addresses", async (req, res) => {
         addr = { street: addr };
       }
     }
-    const addresses = addr && (addr.street || addr.city) ? [{
-      id: "addr-primary",
-      label: addr.label || "Primary Address",
-      line1: addr.street || addr.line1 || "",
-      line2: addr.line2 || "",
-      city: addr.city || "Pollachi",
-      pincode: addr.pincode || "",
-      landmark: addr.landmark || "",
-      isDefault: true,
-    }] : [];
-    res.json({ success: true, data: addresses });
+    const addressList: any[] = [];
+    if (addr && (addr.street || addr.city)) {
+      addressList.push({
+        id: "addr-primary",
+        label: addr.label || "Primary Address",
+        line1: addr.street || addr.line1 || "",
+        line2: addr.line2 || "",
+        city: addr.city || "Pollachi",
+        pincode: addr.pincode || "",
+        landmark: addr.landmark || "",
+        isDefault: true,
+      });
+    }
+    if (Array.isArray(addr?.addresses)) {
+      addr.addresses.forEach((item: any, idx: number) => {
+        const text = typeof item === "string" ? item : (item.line1 || item.street || "");
+        if (text && !addressList.some((a) => a.line1 === text)) {
+          addressList.push({
+            id: `addr-book-${idx + 1}`,
+            label: `Address #${idx + 1}`,
+            line1: text,
+            line2: "",
+            city: addr?.city || "Pollachi",
+            pincode: addr?.pincode || "",
+            landmark: "",
+            isDefault: false,
+          });
+        }
+      });
+    }
+    res.json({ success: true, data: addressList });
   } catch (err: any) {
     req.log?.error(err, "Failed to load customer addresses");
     res.status(500).json({ success: false, data: [] });
@@ -311,13 +349,35 @@ router.patch("/customers/:id", async (req, res) => {
   try {
     const id = req.params.id;
     const { name, phone, email, address, secondaryPhone, creditLimit } = req.body;
+    const gst = typeof req.body?.gstNumber === "string"
+      ? req.body.gstNumber.trim().toUpperCase()
+      : typeof req.body?.gst_number === "string"
+      ? req.body.gst_number.trim().toUpperCase()
+      : undefined;
+
     const payload: Record<string, any> = { updated_at: new Date().toISOString() };
     if (name !== undefined) payload.name = name;
     if (phone !== undefined) payload.phone = phone;
     if (email !== undefined) payload.email = email;
-    if (address !== undefined) payload.address = typeof address === "object" ? address : { street: address };
     if (secondaryPhone !== undefined) payload.secondary_phone = secondaryPhone;
     if (creditLimit !== undefined) payload.credit_limit = Number(creditLimit);
+
+    if (address !== undefined || gst !== undefined) {
+      let mergedAddr: Record<string, any> = {};
+      if (address !== undefined) {
+        mergedAddr = typeof address === "object" && address !== null ? { ...address } : { street: address };
+      } else {
+        const existing = await supabaseRequest<any[]>(`/rest/v1/customers?id=eq.${encodeURIComponent(id)}&select=address&limit=1`, "GET");
+        if (existing[0]?.address && typeof existing[0].address === "object") {
+          mergedAddr = { ...existing[0].address };
+        }
+      }
+      if (gst !== undefined) {
+        mergedAddr.gstNumber = gst;
+        mergedAddr.gst_number = gst;
+      }
+      payload.address = mergedAddr;
+    }
 
     const rows = await supabaseRequest<any[]>(`/rest/v1/customers?id=eq.${encodeURIComponent(id)}`, "PATCH", payload, {
       Prefer: "return=representation",
@@ -396,6 +456,60 @@ router.get("/orders", async (req, res, next) => {
 
   // Otherwise, pass to customer portal handler in portal.ts
   next();
+});
+
+
+// Print Queue Route (must come before /orders/:id)
+router.get("/orders/print-queue", async (req, res) => {
+  try {
+    const rows = await supabaseRequest<any[]>(
+      "/rest/v1/orders?select=*&order=created_at.desc&limit=100",
+      "GET"
+    );
+    const unprinted = (rows || [])
+      .filter((r) => !r.tags_printed && r.status !== "cancelled")
+      .map(mapOrderForErp);
+    res.json({ success: true, data: unprinted });
+  } catch (err: any) {
+    req.log?.error(err, "Failed to fetch print queue");
+    res.json({ success: true, data: [] });
+  }
+});
+
+// Order Logs Route (must come before /orders/:id or handled specifically)
+router.get("/orders/:id/logs", async (req, res) => {
+  try {
+    const orderId = req.params.id;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId);
+    const filter = isUuid ? `id=eq.${encodeURIComponent(orderId)}` : `order_number=eq.${encodeURIComponent(orderId)}`;
+    const rows = await supabaseRequest<any[]>(`/rest/v1/orders?${filter}&limit=1`, "GET");
+    const ord = rows?.[0];
+
+    const logs = [
+      {
+        id: `log-created-${orderId}`,
+        orderId,
+        action: "created",
+        actionTitle: "Order Created",
+        description: `Order #${ord?.order_number || orderId} registered in facility system`,
+        performedBy: ord?.customer_name || "System",
+        timestamp: ord?.created_at || new Date().toISOString(),
+      },
+      {
+        id: `log-status-${orderId}`,
+        orderId,
+        action: "order_status",
+        actionTitle: "Current Status",
+        description: `Current workflow stage: ${ord?.status || "pending"}`,
+        performedBy: "Care Operations",
+        timestamp: ord?.updated_at || ord?.created_at || new Date().toISOString(),
+      }
+    ];
+
+    res.json({ success: true, data: logs });
+  } catch (err: any) {
+    res.json({ success: true, data: [] });
+  }
 });
 
 router.get("/orders/:id", async (req, res, next) => {
@@ -573,23 +687,34 @@ router.get("/v1/bookings", async (req, res) => {
   try {
     const { status, search } = req.query;
     const rows = await supabaseRequest<any[]>("/rest/v1/pickups?select=*&order=created_at.desc&limit=100", "GET");
-    let mapped = rows.map((p) => ({
-      id: p.id,
-      bookingReference: p.booking_reference,
-      customerName: p.customer_name,
-      customerPhone: p.customer_phone,
-      services: p.services,
-      preferredDate: p.preferred_date,
-      preferredSlot: p.time_slot || p.preferred_slot || "morning",
-      timeSlot: p.time_slot,
-      branch: p.branch,
-      storeCode: p.branch || p.store_code || "POL",
-      status: p.status === "pending" ? "new" : (p.status || "new"),
-      address: p.address || p.pickup_address,
-      convertedOrderId: p.converted_order_id || null,
-      createdAt: p.created_at,
-      updatedAt: p.updated_at,
-    }));
+    let mapped = rows.map((p) => {
+      const matchOrder = (p.notes || "").match(/Converted to Order:\s*([A-Za-z0-9_-]+)\s*\(([^)]+)\)/i);
+      const isConverted = p.status === "confirmed" && Boolean(matchOrder);
+      return {
+        id: p.id,
+        bookingReference: p.booking_reference,
+        bookingId: p.booking_reference,
+        requestNumber: p.booking_reference,
+        source: "Doorstep",
+        channel: "Web",
+        customerName: p.customer_name || "Customer",
+        customerPhone: p.customer_phone || "",
+        services: p.services,
+        preferredDate: p.preferred_date,
+        preferredSlot: p.time_slot || p.preferred_slot || "morning",
+        timeSlot: p.time_slot,
+        branch: normalizeStoreCode(p.store_code || p.branch || "POL"),
+        storeCode: normalizeStoreCode(p.store_code || p.branch || "POL"),
+        status: isConverted ? "converted" : p.status === "pending" ? "new" : (p.status || "new"),
+        address: p.address || p.pickup_address,
+        pickupAddress: p.address || p.pickup_address,
+        convertedOrderId: matchOrder ? matchOrder[2] : (p.converted_order_id || null),
+        orderNumber: matchOrder ? matchOrder[1] : null,
+        notes: p.notes || null,
+        createdAt: p.created_at,
+        updatedAt: p.updated_at,
+      };
+    });
 
     if (status && status !== "all") {
       const s = String(status).toLowerCase();
@@ -629,7 +754,7 @@ router.patch("/v1/bookings/:id", async (req, res) => {
       updated_at: new Date().toISOString(),
     };
     if (body.status) patchPayload.status = body.status;
-    if (body.storeCode) patchPayload.branch = body.storeCode;
+    if (body.storeCode) { patchPayload.branch = normalizeStoreCode(body.storeCode); patchPayload.store_code = normalizeStoreCode(body.storeCode); }
 
     await supabaseRequest(`/rest/v1/pickups?id=eq.${encodeURIComponent(id)}`, "PATCH", patchPayload, {
       Prefer: "return=minimal",
@@ -671,7 +796,7 @@ router.post("/v1/bookings/:id/convert-to-order", async (req, res) => {
       credit_used: 0,
       shipping_address: pickup.address || null,
       pickup_date: pickup.preferred_date || new Date().toISOString(),
-      status: "pickup_scheduled",
+      status: "pending",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -684,8 +809,8 @@ router.post("/v1/bookings/:id/convert-to-order", async (req, res) => {
       `/rest/v1/pickups?id=eq.${encodeURIComponent(id)}`,
       "PATCH",
       {
-        status: "converted",
-        converted_order_id: orderId,
+        status: "confirmed",
+        notes: `Converted to Order: ${orderNumber} (${orderId})`,
         updated_at: new Date().toISOString(),
       },
       {

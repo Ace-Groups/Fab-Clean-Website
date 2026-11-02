@@ -1,3 +1,4 @@
+import { FAB_CLEAN_LOGO_BASE64 } from "../assets/logo-base64.js";
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { pickupsTable, usersTable } from "@workspace/db";
@@ -45,6 +46,10 @@ function mapOrder(order: Awaited<ReturnType<typeof fetchOrdersByPhone>>[number])
     dueAmount: Math.max(0, total - advance),
     isCreditOrder: Boolean((order as any).is_credit_order || credit > 0),
     invoiceUrl: order.invoice_url || `/api/orders/${order.id}/receipt`,
+    stainPhotos: Array.isArray((order as any).stain_photos || (order as any).stainPhotos)
+      ? ((order as any).stain_photos || (order as any).stainPhotos)
+      : [],
+    garmentDefects: (order as any).garment_defects || (order as any).notes || null,
   };
 }
 
@@ -159,10 +164,12 @@ router.get("/orders/:id/receipt", async (req, res) => {
 </head>
 <body>
   <div class="card">
-    <div style="background: linear-gradient(135deg, #064e3b, #0f172a); padding: 24px; color: #fff; text-align: center;">
-      <h1 style="margin: 0; font-size: 24px; font-weight: 800; letter-spacing: 0.5px;">FAB CLEAN</h1>
-      <p style="margin: 4px 0 0; font-size: 13px; color: #6ee7b7;">Premium Garment Care & Laundry</p>
-      <div style="margin-top: 14px; display: inline-block; padding: 6px 14px; border-radius: 9999px; background: ${statusBg}; color: ${statusColor}; font-weight: 800; font-size: 12px; letter-spacing: 0.5px;">
+    <div style="background: linear-gradient(135deg, #042f2e, #0f172a); padding: 26px 20px; color: #fff; text-align: center; border-bottom: 2px solid rgba(16,185,129,0.2);">
+      <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 10px;">
+        <img src="${FAB_CLEAN_LOGO_BASE64}" alt="Fab Clean" style="height: 52px; width: auto; object-fit: contain; filter: drop-shadow(0 2px 8px rgba(0,0,0,0.3)); background: rgba(255,255,255,0.96); padding: 5px 14px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.2);" />
+      </div>
+      <p style="margin: 2px 0 0; font-size: 12px; font-weight: 600; color: #6ee7b7; letter-spacing: 0.8px; text-transform: uppercase;">Premium Garment Care & Laundry</p>
+      <div style="margin-top: 12px; display: inline-block; padding: 5px 14px; border-radius: 9999px; background: ${statusBg}; color: ${statusColor}; font-weight: 800; font-size: 11px; letter-spacing: 0.8px;">
         ${mapped.paymentStatus.toUpperCase()}
       </div>
     </div>
@@ -251,7 +258,8 @@ router.get("/users/profile", requireAuth, async (req, res) => {
     }
 
     const uniqueAddresses = Array.from(new Set(rawAddresses.filter((a) => typeof a === "string" && a.trim() !== "")));
-    const gstNumber = String(customerAddr.gst_number || customerAddr.gstNumber || customerAddr.gstin || "").trim();
+    const rawGst = String(customerAddr.gst_number || customerAddr.gstNumber || customerAddr.gstin || "").trim();
+    const gstNumber = (rawGst && rawGst !== "33AAAAA0000A1Z5") ? rawGst : undefined;
     const emailVerified = Boolean(customerAddr.email_verified || customerAddr.emailVerified || false);
 
     res.json({
@@ -262,6 +270,7 @@ router.get("/users/profile", requireAuth, async (req, res) => {
         name: user?.name || customer?.name || undefined,
         email: user?.email || customer?.email || undefined,
         emailVerified,
+        avatarUrl: (customerAddr.avatar_url as string) || (customerAddr.avatarUrl as string) || undefined,
         gstNumber: gstNumber || undefined,
         addresses: uniqueAddresses,
         createdAt: user?.createdAt?.toISOString?.() || customer?.created_at || undefined,
@@ -280,17 +289,35 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
   try {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : undefined;
     const email = typeof req.body?.email === "string" ? req.body.email.trim() : undefined;
-    const gstNumber = typeof req.body?.gstNumber === "string" 
+    const rawGst = typeof req.body?.gstNumber === "string" 
       ? req.body.gstNumber.trim().toUpperCase() 
       : typeof req.body?.gst_number === "string"
       ? req.body.gst_number.trim().toUpperCase()
       : undefined;
-    const emailVerified = typeof req.body?.emailVerified === "boolean" ? req.body.emailVerified : undefined;
+
+    // GST is strictly optional: empty string or placeholder "33AAAAA0000A1Z5" becomes null
+    const gstNumber = (rawGst && rawGst !== "33AAAAA0000A1Z5") ? rawGst : (rawGst !== undefined ? null : undefined);
+
     const addresses = Array.isArray(req.body?.addresses)
       ? req.body.addresses.filter((a: any) => typeof a === "string" && a.trim() !== "")
       : undefined;
+    const avatarUrl = typeof req.body?.avatarUrl === "string"
+      ? req.body.avatarUrl.trim()
+      : typeof req.body?.avatar_url === "string"
+      ? req.body.avatar_url.trim()
+      : undefined;
 
-    const [updatedUser, customer] = await Promise.all([
+    const [existingUser, customer] = await Promise.all([
+      db.query.usersTable.findFirst({
+        where: eq(usersTable.id, req.authUser!.userId),
+      }),
+      fetchCustomerByPhone(req.authUser!.phone),
+    ]);
+
+    // If email is changed, reset email verification status to false until re-verified with OTP
+    const isEmailChanging = email !== undefined && email !== (customer?.email || existingUser?.email);
+
+    const [updatedUser] = await Promise.all([
       db
         .update(usersTable)
         .set({
@@ -301,7 +328,6 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
         .where(eq(usersTable.id, req.authUser!.userId))
         .returning()
         .then((rows) => rows[0]),
-      fetchCustomerByPhone(req.authUser!.phone),
     ]);
 
     let updatedCustomer = customer;
@@ -312,8 +338,9 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
 
       const newAddressObj: Record<string, unknown> = {
         ...currentAddr,
+        ...(avatarUrl !== undefined ? { avatar_url: avatarUrl, avatarUrl } : {}),
         ...(gstNumber !== undefined ? { gst_number: gstNumber, gstNumber } : {}),
-        ...(emailVerified !== undefined ? { email_verified: emailVerified, emailVerified } : {}),
+        ...(isEmailChanging ? { email_verified: false, emailVerified: false } : {}),
         ...(addresses !== undefined ? { addresses } : {}),
       };
 
@@ -328,8 +355,9 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
       ? (updatedCustomer.address as Record<string, unknown>)
       : {};
 
-    const resolvedGst = String(customerAddr.gst_number || customerAddr.gstNumber || gstNumber || "").trim();
-    const resolvedEmailVerified = Boolean(customerAddr.email_verified || customerAddr.emailVerified || emailVerified || false);
+    const rawCustGst = String(customerAddr.gst_number || customerAddr.gstNumber || "").trim();
+    const resolvedGst = (rawCustGst && rawCustGst !== "33AAAAA0000A1Z5") ? rawCustGst : undefined;
+    const resolvedEmailVerified = isEmailChanging ? false : Boolean(customerAddr.email_verified || customerAddr.emailVerified || false);
 
     res.json({
       success: true,
@@ -339,7 +367,8 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
         name: updatedUser?.name || updatedCustomer?.name || undefined,
         email: updatedUser?.email || updatedCustomer?.email || undefined,
         emailVerified: resolvedEmailVerified,
-        gstNumber: resolvedGst || undefined,
+        avatarUrl: (customerAddr.avatar_url as string) || (customerAddr.avatarUrl as string) || avatarUrl || undefined,
+        gstNumber: resolvedGst,
         addresses: updatedUser?.addresses || (customerAddr.addresses as string[]) || [],
         createdAt: updatedUser?.createdAt?.toISOString?.() || updatedCustomer?.created_at || undefined,
       },
@@ -369,15 +398,36 @@ router.post("/users/send-email-otp", requireAuth, async (req, res) => {
     }
 
     const isDemo = targetEmail === "kavinbalaji365@gmail.com" || phone.includes("8825702072") || phone.includes("9087172072");
-    const code = isDemo ? "3223" : Math.floor(1000 + Math.random() * 9000).toString();
+    const code = isDemo ? "3223" : Math.floor(100000 + Math.random() * 900000).toString();
 
     emailOtpCache.set(targetEmail, {
       code,
-      expiresAt: Date.now() + 10 * 60 * 1000,
+      expiresAt: Date.now() + 15 * 60 * 1000,
     });
 
     req.log.info({ targetEmail, isDemo }, "Email verification OTP generated");
 
+    // 1. Dispatch Supabase Auth OTP (triggers branded verification email)
+    try {
+      const baseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
+      const serviceKey = process.env.SUPABASE_SERVICE_KEY;
+      if (baseUrl && serviceKey) {
+        await fetch(`${baseUrl}/auth/v1/otp`, {
+          method: "POST",
+          headers: {
+            apikey: serviceKey,
+            Authorization: `Bearer ${serviceKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: targetEmail,
+            create_user: true,
+          }),
+        }).catch(() => {});
+      }
+    } catch (_) {}
+
+    // 2. Dispatch MSG91 OTP route if configured
     try {
       const authKey = process.env.MSG91_AUTH_KEY;
       if (authKey) {
@@ -421,14 +471,40 @@ router.post("/users/verify-email-otp", requireAuth, async (req, res) => {
     if (!rawEmail || !otp) {
       res.status(400).json({
         success: false,
-        error: { code: "VALIDATION_ERROR", message: "Email and 4-digit code are required" },
+        error: { code: "VALIDATION_ERROR", message: "Email and verification code are required" },
       });
       return;
     }
 
     const cached = emailOtpCache.get(rawEmail);
     const isDemo = rawEmail === "kavinbalaji365@gmail.com" || phone.includes("8825702072") || phone.includes("9087172072");
-    const isMatch = (cached && cached.code === otp && Date.now() <= cached.expiresAt) || (isDemo && otp === "3223") || otp === "3223";
+    let isMatch = (cached && cached.code === otp && Date.now() <= cached.expiresAt) || (isDemo && (otp === "3223" || otp === "123456"));
+
+    // Verify against Supabase Auth OTP verification if not matched in cache
+    if (!isMatch) {
+      try {
+        const baseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
+        const serviceKey = process.env.SUPABASE_SERVICE_KEY;
+        if (baseUrl && serviceKey) {
+          const verifyRes = await fetch(`${baseUrl}/auth/v1/verify`, {
+            method: "POST",
+            headers: {
+              apikey: serviceKey,
+              Authorization: `Bearer ${serviceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              type: "email",
+              token: otp,
+              email: rawEmail,
+            }),
+          });
+          if (verifyRes.ok) {
+            isMatch = true;
+          }
+        }
+      } catch (_) {}
+    }
 
     if (!isMatch) {
       res.status(400).json({
@@ -544,6 +620,130 @@ router.get("/pickups", requireAuth, async (req, res) => {
       success: false,
       error: { code: "INTERNAL_ERROR", message: "Failed to load pickups" },
     });
+  }
+});
+
+
+/**
+ * POST /api/users/avatar
+ * Upload customer profile picture to Supabase "avatars" bucket
+ */
+router.post("/users/avatar", requireAuth, async (req, res) => {
+  try {
+    const { base64Data, mimeType = "image/jpeg" } = req.body;
+    if (!base64Data) {
+      return res.status(400).json({ success: false, error: { message: "base64Data is required" } });
+    }
+
+    const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, "");
+    const buffer = Buffer.from(cleanBase64, "base64");
+    const ext = mimeType.split("/")[1] || "jpeg";
+    const filename = `avatar_${req.authUser!.userId}_${Date.now()}.${ext}`;
+
+    const baseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
+    const serviceKey = process.env.SUPABASE_SERVICE_KEY;
+
+    // Upload directly to Supabase Storage avatars bucket
+    const uploadRes = await fetch(`${baseUrl}/storage/v1/object/avatars/${filename}`, {
+      method: "POST",
+      headers: {
+        apikey: serviceKey!,
+        Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": mimeType,
+      },
+      body: buffer,
+    });
+
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text();
+      req.log.error({ errText }, "Supabase avatar upload failed");
+      return res.status(500).json({ success: false, error: { message: "Storage upload failed" } });
+    }
+
+    const publicUrl = `${baseUrl}/storage/v1/object/public/avatars/${filename}`;
+
+    // Update customer profile with the new avatar_url
+    const customer = await fetchCustomerByPhone(req.authUser!.phone);
+    if (customer?.id) {
+      const currentAddr = (typeof customer.address === "object" && customer.address !== null)
+        ? (customer.address as Record<string, unknown>)
+        : {};
+      await updateCustomerById(customer.id, {
+        address: { ...currentAddr, avatar_url: publicUrl, avatarUrl: publicUrl },
+      });
+    }
+
+    res.json({ success: true, data: { avatarUrl: publicUrl } });
+  } catch (err: any) {
+    req.log.error(err, "Failed to upload avatar");
+    res.status(500).json({ success: false, error: { message: err.message || "Failed to upload avatar" } });
+  }
+});
+
+/**
+ * POST /api/orders/:id/stains
+ * Allows staff or system to upload inspection/stain photos for an order
+ */
+router.post("/orders/:id/stains", async (req, res) => {
+  try {
+    const orderId = req.params.id;
+    const { base64Data, label = "Fabric Stain / Inspection", note = "", mimeType = "image/jpeg" } = req.body;
+    if (!base64Data) {
+      return res.status(400).json({ success: false, error: { message: "base64Data is required" } });
+    }
+
+    const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, "");
+    const buffer = Buffer.from(cleanBase64, "base64");
+    const ext = mimeType.split("/")[1] || "jpeg";
+    const filename = `stain_${orderId}_${Date.now()}.${ext}`;
+
+    const baseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
+    const serviceKey = process.env.SUPABASE_SERVICE_KEY;
+
+    const uploadRes = await fetch(`${baseUrl}/storage/v1/object/order-stains/${filename}`, {
+      method: "POST",
+      headers: {
+        apikey: serviceKey!,
+        Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": mimeType,
+      },
+      body: buffer,
+    });
+
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text();
+      req.log?.error?.({ errText }, "Supabase stain photo upload failed");
+      return res.status(500).json({ success: false, error: { message: "Storage upload failed" } });
+    }
+
+    const publicUrl = `${baseUrl}/storage/v1/object/public/order-stains/${filename}`;
+    const newPhoto = {
+      id: `photo_${Date.now()}`,
+      url: publicUrl,
+      label,
+      note,
+      uploadedAt: new Date().toISOString(),
+    };
+
+    // Append to order notes or stain_photos in Supabase
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId);
+    const filter = isUuid ? `id=eq.${encodeURIComponent(orderId)}` : `order_number=eq.${encodeURIComponent(orderId)}`;
+    const orders = await supabaseRequest<any[]>(`/rest/v1/orders?${filter}&limit=1`, "GET");
+    const order = orders[0];
+
+    if (order) {
+      const existingStains = Array.isArray(order.stain_photos) ? order.stain_photos : [];
+      const updatedStains = [...existingStains, newPhoto];
+      await supabaseRequest(`/rest/v1/orders?${filter}`, "PATCH", {
+        stain_photos: updatedStains,
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    res.json({ success: true, data: newPhoto });
+  } catch (err: any) {
+    req.log?.error?.(err, "Failed to upload stain photo");
+    res.status(500).json({ success: false, error: { message: err.message || "Upload failed" } });
   }
 });
 
