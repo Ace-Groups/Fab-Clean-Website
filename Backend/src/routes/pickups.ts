@@ -1,9 +1,14 @@
 import { Router, type IRouter } from "express";
 import jwt from "jsonwebtoken";
-import { db } from "@workspace/db";
+import { db, pool } from "@workspace/db";
 import { pickupsTable, storesTable, usersTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
-import { fetchAppStores } from "../lib/supabase-admin.js";
+import {
+  fetchAppStores,
+  fetchCustomerByPhone,
+  fetchOrdersByPhone,
+  insertWalletTransaction,
+} from "../lib/supabase-admin.js";
 import { JWT_SECRET } from "../lib/auth.js";
 
 const router: IRouter = Router();
@@ -207,6 +212,155 @@ router.post("/pickups", async (req, res) => {
       req.log.error(e, "Failed to sync user profile during pickup booking");
     }
 
+    // -----------------------------------------------------------------
+    // REFERRAL & 50/50 BONUS PROCESSING
+    // -----------------------------------------------------------------
+    let referralBonusResult: { applied: boolean; refereeReward: number; message: string } | null = null;
+    const rawRefCode = String(req.body.referralCode || req.body.ref || "").trim();
+
+    if (rawRefCode) {
+      try {
+        const refCode = rawRefCode.toUpperCase();
+        const cleanCustomerPhone = String(phone).replace(/\D/g, "").slice(-10);
+
+        // Check if referee already got referral reward or has prior orders
+        const priorReferral = await pool.query(
+          "SELECT id FROM portal_referrals WHERE referee_phone = $1 LIMIT 1",
+          [cleanCustomerPhone]
+        ).catch(() => ({ rows: [] }));
+        const priorOrders = await fetchOrdersByPhone(cleanCustomerPhone).catch(() => []);
+
+        if (priorReferral.rows.length === 0 && (!priorOrders || priorOrders.length <= 1)) {
+          // Identify referrer
+          let referrerUserId: string | null = null;
+          let referrerPhone: string | null = null;
+          let referrerCustomerId: string | null = null;
+          const refereeReward = refCode === "FAB25" ? 25 : 50; // default ₹50 for 50/50 promo
+          const referrerReward = 50;
+
+          const isPromo = ["FAB50", "WELCOME50", "DIWALI50", "5050", "FAB25"].includes(refCode);
+
+          if (!isPromo) {
+            const cleanPrefix = refCode.replace(/^FAB/i, "").toLowerCase();
+            const userMatch = await pool.query(
+              `SELECT id, name, phone, customer_id FROM website_users 
+               WHERE REPLACE(id::text, '-', '') ILIKE $1 
+                  OR phone = $2 
+               LIMIT 1`,
+              [`${cleanPrefix}%`, refCode]
+            ).catch(() => ({ rows: [] }));
+
+            if (userMatch.rows.length > 0) {
+              referrerUserId = userMatch.rows[0].id;
+              referrerPhone = userMatch.rows[0].phone;
+              referrerCustomerId = userMatch.rows[0].customer_id;
+            } else {
+              const mappMatch = await pool.query(
+                `SELECT id, name, phone, erp_customer_id FROM mapp_users 
+                 WHERE referral_code ILIKE $1 
+                    OR REPLACE(id::text, '-', '') ILIKE $2 
+                    OR phone = $3 
+                 LIMIT 1`,
+                [refCode, `${cleanPrefix}%`, refCode]
+              ).catch(() => ({ rows: [] }));
+              if (mappMatch.rows.length > 0) {
+                referrerUserId = mappMatch.rows[0].id;
+                referrerPhone = mappMatch.rows[0].phone;
+                referrerCustomerId = mappMatch.rows[0].erp_customer_id;
+              }
+            }
+          }
+
+          // Cannot refer oneself
+          const isSelf = referrerPhone && String(referrerPhone).replace(/\D/g, "").slice(-10) === cleanCustomerPhone;
+          if (!isSelf && (isPromo || referrerPhone)) {
+            // Ensure referee customer record in ERP/customers table
+            let refereeCustomer = await fetchCustomerByPhone(cleanCustomerPhone);
+            let refereeCustId = refereeCustomer?.id;
+            if (!refereeCustId) {
+              const newCust = await pool.query(
+                "INSERT INTO customers (name, phone) VALUES ($1, $2) RETURNING id",
+                [String(name || "Customer"), cleanCustomerPhone]
+              ).catch(() => ({ rows: [] }));
+              refereeCustId = newCust.rows[0]?.id;
+            }
+
+            // Ensure referrer customer record in ERP/customers table (if known)
+            let finalReferrerCustId = referrerCustomerId;
+            if (!finalReferrerCustId && referrerPhone) {
+              const rCust = await fetchCustomerByPhone(referrerPhone);
+              if (rCust?.id) {
+                finalReferrerCustId = rCust.id;
+              } else {
+                const newRefCust = await pool.query(
+                  "INSERT INTO customers (name, phone) VALUES ($1, $2) RETURNING id",
+                  ["Customer", referrerPhone]
+                ).catch(() => ({ rows: [] }));
+                finalReferrerCustId = newRefCust.rows[0]?.id;
+              }
+            }
+
+            // 1. Credit Referee Wallet
+            if (refereeCustId) {
+              await insertWalletTransaction({
+                customer_id: refereeCustId,
+                type: "credit",
+                transaction_type: "CREDIT",
+                amount: refereeReward,
+                payment_method: "OTHER",
+                reference_type: "MANUAL",
+                reference_id: bookingReference,
+                note: `[REFERRAL] 1st booking welcome cash: ₹${refereeReward} (Code: ${refCode})`,
+              }).catch((e: any) => req.log.error(e, "Referee wallet credit error"));
+            }
+
+            // 2. Credit Referrer Wallet
+            if (finalReferrerCustId) {
+              await insertWalletTransaction({
+                customer_id: finalReferrerCustId,
+                type: "credit",
+                transaction_type: "CREDIT",
+                amount: referrerReward,
+                payment_method: "OTHER",
+                reference_type: "MANUAL",
+                reference_id: bookingReference,
+                note: `[REFERRAL] Reward: ₹${referrerReward} (${name} booked pickup #${bookingReference})`,
+              }).catch((e: any) => req.log.error(e, "Referrer wallet credit error"));
+            }
+
+            // 3. Record in portal_referrals
+            await pool.query(
+              `INSERT INTO portal_referrals (
+                referrer_user_id, referrer_phone, referrer_customer_id,
+                referee_phone, referee_customer_id, referral_code,
+                booking_reference, referrer_reward, referee_reward, status
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'credited')`,
+              [
+                referrerUserId,
+                referrerPhone || "PROMO",
+                finalReferrerCustId,
+                cleanCustomerPhone,
+                refereeCustId,
+                refCode,
+                bookingReference,
+                referrerReward,
+                refereeReward,
+              ]
+            ).catch((e: any) => req.log.error(e, "Error recording portal_referrals"));
+
+            referralBonusResult = {
+              applied: true,
+              refereeReward,
+              message: `🎉 ₹${refereeReward} referral welcome cash credited to your Fab Clean wallet!`,
+            };
+            req.log.info({ refCode, refereePhone: cleanCustomerPhone, referrerPhone }, "Referral rewards successfully credited!");
+          }
+        }
+      } catch (refErr) {
+        req.log.error(refErr, "Error processing referral credit during pickup booking");
+      }
+    }
+
     res.status(201).json({
       success: true,
       data: {
@@ -214,7 +368,10 @@ router.post("/pickups", async (req, res) => {
         erpBookingId: erpBooking?.bookingId ?? null,
         erpBookingInternalId: erpBooking?.id ?? null,
         erpStatus: erpBooking?.status ?? null,
-        message: `Your pickup has been scheduled! Reference: ${bookingReference}. We'll contact you at ${phone} to confirm.`,
+        referralBonus: referralBonusResult,
+        message: referralBonusResult 
+          ? `Your pickup has been scheduled! Reference: ${bookingReference}. ${referralBonusResult.message}`
+          : `Your pickup has been scheduled! Reference: ${bookingReference}. We'll contact you at ${phone} to confirm.`,
       },
     });
   } catch (err) {

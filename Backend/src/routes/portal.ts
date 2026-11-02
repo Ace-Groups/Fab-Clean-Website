@@ -1,9 +1,10 @@
 import { FAB_CLEAN_LOGO_BASE64 } from "../assets/logo-base64.js";
 import { Router, type IRouter } from "express";
-import { db } from "@workspace/db";
+import jwt from "jsonwebtoken";
+import { db, pool } from "@workspace/db";
 import { pickupsTable, usersTable } from "@workspace/db";
 import { desc, eq, inArray } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, JWT_SECRET, normalizePhone } from "../lib/auth.js";
 import {
   fetchCustomerByPhone,
   fetchOrdersByPhone,
@@ -11,6 +12,7 @@ import {
   mapWalletSummary,
   updateCustomerById,
   supabaseRequest,
+  insertWalletTransaction,
 } from "../lib/supabase-admin.js";
 
 const router: IRouter = Router();
@@ -570,6 +572,206 @@ router.get("/wallet/summary", requireAuth, async (req, res) => {
     res.status(500).json({
       success: false,
       error: { code: "INTERNAL_ERROR", message: "Failed to load wallet summary" },
+    });
+  }
+});
+
+// -------------------------------------------------------------
+// REFERRAL & 50/50 PROMOTION PROGRAM ENDPOINTS
+// -------------------------------------------------------------
+
+router.get(["/referral-info", "/portal/referral-info"], requireAuth, async (req, res) => {
+  try {
+    const userId = req.authUser!.userId;
+    const phone = req.authUser!.phone || "";
+    
+    // Deterministic referral code: "FAB" + 6 chars of user UUID
+    const referralCode = `FAB${userId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    const candidates = phoneCandidates(phone);
+
+    // Query referrals where user is the referrer
+    const referralsQuery = await pool.query(
+      `SELECT id, referee_phone, referee_customer_id, booking_reference, referrer_reward, referee_reward, status, created_at 
+       FROM portal_referrals 
+       WHERE referrer_user_id = $1 OR referrer_phone = ANY($2::text[])
+       ORDER BY created_at DESC LIMIT 50`,
+      [userId, candidates]
+    ).catch(() => ({ rows: [] }));
+
+    const rows = referralsQuery.rows || [];
+    const totalInvited = rows.length;
+    const successfulConversions = rows.filter((r: any) => r.status === "credited" || r.status === "completed").length;
+    const totalEarned = rows.reduce((sum: number, r: any) => sum + Number(r.referrer_reward || 50), 0);
+
+    const recentReferrals = rows.map((r: any) => {
+      const p = String(r.referee_phone || "");
+      const maskedPhone = p.length >= 10 
+        ? `${p.slice(0, 3)}****${p.slice(-3)}`
+        : "Valued Friend";
+      return {
+        id: r.id,
+        refereeMasked: maskedPhone,
+        reward: Number(r.referrer_reward || 50),
+        status: r.status,
+        date: r.created_at,
+        bookingRef: r.booking_reference,
+      };
+    });
+
+    const referralLink = `https://app.myfabclean.com?ref=${referralCode}`;
+    const shareText = `✨ Get ₹50 credited to your Fab Clean wallet for luxury dry cleaning & laundry! Use my referral code *${referralCode}* when booking your doorstep pickup: ${referralLink}`;
+
+    res.json({
+      success: true,
+      data: {
+        referralCode,
+        referralLink,
+        stats: {
+          totalInvited,
+          successfulConversions,
+          totalEarned,
+        },
+        rewardConfig: {
+          referrerReward: 50,
+          refereeReward: 25,
+          promoRefereeReward: 50,
+          campaignName: "50/50 Refer & Earn Special",
+          promoTitle: "Give ₹50, Get ₹50",
+          promoSubtitle: "Earn ₹50 wallet cash when your friend places their first doorstep pickup!",
+        },
+        recentReferrals,
+        shareText,
+      },
+    });
+  } catch (err) {
+    req.log.error(err, "Failed to fetch referral info");
+    res.status(500).json({
+      success: false,
+      error: { code: "INTERNAL_ERROR", message: "Failed to fetch referral information" },
+    });
+  }
+});
+
+router.post(["/apply-referral", "/portal/apply-referral"], async (req, res) => {
+  try {
+    const rawCode = String(req.body.code || "").trim();
+    if (!rawCode) {
+      res.status(400).json({
+        success: false,
+        error: { code: "VALIDATION_ERROR", message: "Please enter a referral or promo code" },
+      });
+      return;
+    }
+
+    const code = rawCode.toUpperCase();
+    
+    // Check if auth user is provided
+    let authUserPhone = "";
+    let authUserId = "";
+    if (req.headers.authorization) {
+      try {
+        const token = req.headers.authorization.replace(/^Bearer\s+/i, "").trim();
+        const decoded = jwt.verify(token, JWT_SECRET, { ignoreExpiration: true }) as any;
+        if (decoded?.phone) authUserPhone = normalizePhone(decoded.phone);
+        if (decoded?.userId || decoded?.id) authUserId = String(decoded.userId || decoded.id);
+      } catch (_) {}
+    }
+
+    const userPhone = normalizePhone(req.body.phone || authUserPhone || "");
+
+    // Self-referral check
+    if (authUserId) {
+      const myCode = `FAB${authUserId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+      const myAltCode = authUserId.replace(/-/g, "").slice(0, 8).toUpperCase();
+      if (code === myCode || code === myAltCode) {
+        res.status(400).json({
+          success: false,
+          error: { code: "INVALID_CODE", message: "You cannot use your own referral code." },
+        });
+        return;
+      }
+    }
+
+    // Check if this phone already used a referral or has completed orders
+    if (userPhone) {
+      const candidates = phoneCandidates(userPhone);
+      const existingRef = await pool.query(
+        "SELECT id FROM portal_referrals WHERE referee_phone = ANY($1::text[]) LIMIT 1",
+        [candidates]
+      ).catch(() => ({ rows: [] }));
+      if (existingRef.rows.length > 0) {
+        res.status(400).json({
+          success: false,
+          error: { code: "ALREADY_USED", message: "A referral code has already been applied to your account." },
+        });
+        return;
+      }
+
+      const existingOrders = await fetchOrdersByPhone(userPhone).catch(() => []);
+      if (existingOrders && existingOrders.length > 0) {
+        res.status(400).json({
+          success: false,
+          error: { code: "NOT_ELIGIBLE", message: "Referral bonuses are reserved for first-time customers." },
+        });
+        return;
+      }
+    }
+
+    // Check system promotional codes
+    const isPromo = ["FAB50", "WELCOME50", "DIWALI50", "5050", "FAB25"].includes(code);
+    let referrerName = "Fab Clean Community";
+    const refereeReward = code === "FAB25" ? 25 : 50;
+
+    if (!isPromo) {
+      // Find matching user by referral code prefix or phone
+      const cleanPrefix = code.replace(/^FAB/i, "").toLowerCase();
+      const userMatch = await pool.query(
+        `SELECT id, name, phone FROM website_users 
+         WHERE REPLACE(id::text, '-', '') ILIKE $1 
+            OR phone = $2 
+         LIMIT 1`,
+        [`${cleanPrefix}%`, code]
+      ).catch(() => ({ rows: [] }));
+
+      if (userMatch.rows.length === 0) {
+        const mappMatch = await pool.query(
+          `SELECT id, name, phone, referral_code FROM mapp_users 
+           WHERE referral_code ILIKE $1 
+              OR REPLACE(id::text, '-', '') ILIKE $2 
+              OR phone = $3 
+           LIMIT 1`,
+          [code, `${cleanPrefix}%`, code]
+        ).catch(() => ({ rows: [] }));
+
+        if (mappMatch.rows.length === 0) {
+          res.status(400).json({
+            success: false,
+            error: { code: "INVALID_CODE", message: "Invalid referral code. Please check and try again." },
+          });
+          return;
+        } else {
+          referrerName = mappMatch.rows[0].name || "Your Friend";
+        }
+      } else {
+        referrerName = userMatch.rows[0].name || "Your Friend";
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        code,
+        valid: true,
+        referrerName,
+        rewardAmount: refereeReward,
+        message: `🎉 Referral code applied! ₹${refereeReward} will be credited to your wallet upon booking.`,
+      },
+    });
+  } catch (err) {
+    req.log.error(err, "Failed to apply referral code");
+    res.status(500).json({
+      success: false,
+      error: { code: "INTERNAL_ERROR", message: "Failed to validate referral code" },
     });
   }
 });
