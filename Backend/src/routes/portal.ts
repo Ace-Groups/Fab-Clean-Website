@@ -11,6 +11,7 @@ import {
   fetchOwnedOrderById,
   mapWalletSummary,
   updateCustomerById,
+  createCustomer,
   supabaseRequest,
   insertWalletTransaction,
 } from "../lib/supabase-admin.js";
@@ -411,24 +412,38 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
     ]);
 
     let updatedCustomer = customer;
+    const currentAddr = (typeof customer?.address === "object" && customer.address !== null)
+      ? (customer.address as Record<string, unknown>)
+      : {};
+
+    const newAddressObj: Record<string, unknown> = {
+      ...currentAddr,
+      ...(avatarUrl !== undefined ? { avatar_url: avatarUrl, avatarUrl } : {}),
+      ...(gstNumber !== undefined ? { gst_number: gstNumber, gstNumber } : {}),
+      ...(isEmailChanging ? { email_verified: false, emailVerified: false } : {}),
+      ...(addresses !== undefined ? { addresses } : {}),
+    };
+
     if (customer?.id) {
-      const currentAddr = (typeof customer.address === "object" && customer.address !== null)
-        ? (customer.address as Record<string, unknown>)
-        : {};
-
-      const newAddressObj: Record<string, unknown> = {
-        ...currentAddr,
-        ...(avatarUrl !== undefined ? { avatar_url: avatarUrl, avatarUrl } : {}),
-        ...(gstNumber !== undefined ? { gst_number: gstNumber, gstNumber } : {}),
-        ...(isEmailChanging ? { email_verified: false, emailVerified: false } : {}),
-        ...(addresses !== undefined ? { addresses } : {}),
-      };
-
       updatedCustomer = await updateCustomerById(customer.id, {
         ...(name !== undefined ? { name: name || null } : {}),
         ...(email !== undefined ? { email: email || null } : {}),
         address: newAddressObj,
       });
+    } else {
+      updatedCustomer = await createCustomer({
+        name: name || updatedUser?.name || "Customer",
+        phone: req.authUser!.phone,
+        email: email || null,
+        address: newAddressObj,
+        status: "active",
+      });
+      if (updatedCustomer?.id) {
+        await db
+          .update(usersTable)
+          .set({ customerId: updatedCustomer.id })
+          .where(eq(usersTable.id, req.authUser!.userId));
+      }
     }
 
     const customerAddr = (typeof updatedCustomer?.address === "object" && updatedCustomer?.address !== null)
@@ -465,8 +480,8 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
 router.post("/users/send-email-otp", requireAuth, async (req, res) => {
   try {
     const rawEmail = typeof req.body?.email === "string" ? req.body.email.trim() : "";
-    const phone = req.authUser!.phone;
-    const customer = await fetchCustomerByPhone(phone);
+    const phone = req.authUser?.phone || "";
+    const customer = phone ? await fetchCustomerByPhone(phone) : null;
     const targetEmail = (rawEmail || customer?.email || "").toLowerCase().trim();
 
     if (!targetEmail || !targetEmail.includes("@")) {
@@ -478,7 +493,7 @@ router.post("/users/send-email-otp", requireAuth, async (req, res) => {
     }
 
     const isDemo = targetEmail === "kavinbalaji365@gmail.com" || phone.includes("8825702072") || phone.includes("9087172072");
-    const code = isDemo ? "3223" : Math.floor(100000 + Math.random() * 900000).toString();
+    const code = isDemo ? "3223" : Math.floor(1000 + Math.random() * 9000).toString();
 
     emailOtpCache.set(targetEmail, {
       code,
@@ -519,7 +534,7 @@ router.post("/users/verify-email-otp", requireAuth, async (req, res) => {
   try {
     const rawEmail = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
     const otp = typeof req.body?.otp === "string" ? req.body.otp.trim() : "";
-    const phone = req.authUser!.phone;
+    const phone = req.authUser?.phone || "";
 
     if (!rawEmail || !otp) {
       res.status(400).json({
@@ -588,6 +603,27 @@ router.post("/users/verify-email-otp", requireAuth, async (req, res) => {
           emailVerified: true,
         },
       });
+    } else {
+      const existingUser = await db.query.usersTable.findFirst({
+        where: eq(usersTable.id, req.authUser!.userId),
+      });
+      const newCust = await createCustomer({
+        name: existingUser?.name || "Customer",
+        phone,
+        email: rawEmail,
+        address: {
+          email_verified: true,
+          emailVerified: true,
+          ...(existingUser?.addresses ? { addresses: existingUser.addresses } : {}),
+        },
+        status: "active",
+      });
+      if (newCust?.id) {
+        await db
+          .update(usersTable)
+          .set({ customerId: newCust.id, email: rawEmail })
+          .where(eq(usersTable.id, req.authUser!.userId));
+      }
     }
 
     res.json({

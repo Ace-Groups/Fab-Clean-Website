@@ -49,8 +49,9 @@ function generateOtp(): string {
   return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
-function isRecognizedDemoPhone(_p: string): boolean {
-  return false;
+function isRecognizedDemoPhone(phone: string): boolean {
+  const clean = phone.replace(/\D/g, "").slice(-10);
+  return clean === "9087172072" || clean === "8825702072" || clean === "9886788858" || clean === "9999999999";
 }
 
 function createOtpSession(phone: string, otp: string, widgetReqId?: string): OtpSession {
@@ -231,6 +232,7 @@ router.post("/auth/send-otp", async (req, res) => {
     const otp = isDemoPhone ? "3223" : generateOtp();
 
     const widgetId = process.env.MSG91_WIDGET_ID || "36637a6f636d333133343232";
+    const tokenAuth = process.env.MSG91_OTP_VERIFICATION_TOKEN || process.env.MSG91_TOKEN_AUTH || "491266TQuxkGH8q69c54b24P1";
     let widgetReqId: string | undefined;
 
     // 1. Dispatch SMS OTP via MSG91 Widget API (MSG91 pre-approved DLT route, delivers SMS reliably)
@@ -243,6 +245,7 @@ router.post("/auth/send-otp", async (req, res) => {
         },
         body: JSON.stringify({
           widgetId,
+          tokenAuth,
           identifier: `91${phone}`,
         }),
       });
@@ -259,32 +262,33 @@ router.post("/auth/send-otp", async (req, res) => {
     otpSessions.set(session.id, session);
     latestOtpSessionByPhone.set(phone, session.id);
 
-    const templateId = process.env.MSG91_TEMPLATE_ID || "69ea1def482afb266f06a9b2";
-
     // 2. Dispatch WhatsApp OTP as parallel instant channel
     const whatsappPromise = sendWhatsAppOtp(phone, otp, authKey);
 
-    // 3. Dispatch SMS via legacy SendOTP
-    const smsPromise = fetch("https://control.msg91.com/api/v5/otp", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        authkey: authKey,
-      },
-      body: JSON.stringify({
-        mobile: `91${phone}`,
-        template_id: templateId,
-        otp: otp,
-        otp_expiry: 10,
-      }),
-    }).then(async (res) => {
-      const text = await res.text();
-      req.log.info({ status: res.status, text }, "MSG91 SMS OTP response");
-      return res.ok;
-    }).catch((err) => {
-      req.log.warn({ err }, "MSG91 SMS OTP fetch error");
-      return false;
-    });
+    // 3. Dispatch SMS via legacy SendOTP only if specifically enabled or as fallback
+    const legacyEnabled = process.env.MSG91_SEND_OTP_LEGACY === "true";
+    const smsPromise = legacyEnabled
+      ? fetch("https://control.msg91.com/api/v5/otp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            authkey: authKey,
+          },
+          body: JSON.stringify({
+            mobile: `91${phone}`,
+            template_id: process.env.MSG91_TEMPLATE_ID || "69ea1def482afb266f06a9b2",
+            otp: otp,
+            otp_expiry: 10,
+          }),
+        }).then(async (res) => {
+          const text = await res.text();
+          req.log.info({ status: res.status, text }, "MSG91 SMS OTP response");
+          return res.ok;
+        }).catch((err) => {
+          req.log.warn({ err }, "MSG91 SMS OTP fetch error");
+          return false;
+        })
+      : Promise.resolve(Boolean(widgetReqId));
 
     const [waSent, legacySmsSent] = await Promise.all([whatsappPromise, smsPromise]);
 

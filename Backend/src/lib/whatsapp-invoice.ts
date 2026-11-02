@@ -147,7 +147,7 @@ export async function sendWhatsAppPaymentUpdate(
       body: JSON.stringify(payload),
     });
 
-    const data = await response.json();
+    const data: any = await response.json().catch(() => ({}));
     if (!response.ok) {
       console.warn(`[WhatsApp MSG91] Payment update template returned error:`, data);
       return { success: false, data, error: data?.message || "Failed to send WhatsApp message" };

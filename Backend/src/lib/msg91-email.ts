@@ -34,9 +34,9 @@ export interface Msg91EmailResult {
 }
 
 const DEFAULT_AUTH_KEY = process.env.MSG91_AUTH_KEY || "491266AqsX3mD29Cew69c118abP1";
-const DEFAULT_FROM_EMAIL = process.env.MSG91_FROM_EMAIL || process.env.SMTP_FROM_EMAIL || "support@myfabclean.com";
+const DEFAULT_FROM_EMAIL = process.env.MSG91_FROM_EMAIL || process.env.SMTP_FROM_EMAIL || "otp@mail.myfabclean.com";
 const DEFAULT_FROM_NAME = process.env.MSG91_FROM_NAME || "Fab Clean";
-const DEFAULT_DOMAIN = process.env.MSG91_EMAIL_DOMAIN || "myfabclean.com";
+const DEFAULT_DOMAIN = process.env.MSG91_EMAIL_DOMAIN || "mail.myfabclean.com";
 const ACE_DIGITAL_URL = "https://www.acedigital.cc";
 
 /**
@@ -99,9 +99,32 @@ export async function sendMsg91Email(options: Msg91SendEmailOptions): Promise<Ms
       body: JSON.stringify(payload),
     });
 
-    const data = await response.json().catch(() => null);
+    const data: any = await response.json().catch(() => null);
 
     if (!response.ok) {
+      if (templateId && templateId !== "global_otp") {
+        console.warn(`[MSG91 Email] Template "${templateId}" failed with status ${response.status}. Retrying with global_otp...`);
+        const fallbackPayload = {
+          ...payload,
+          template_id: "global_otp",
+        };
+        const fbRes = await fetch("https://control.msg91.com/api/v5/email/send", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            authkey: authKey,
+          },
+          body: JSON.stringify(fallbackPayload),
+        });
+        const fbData: any = await fbRes.json().catch(() => null);
+        if (fbRes.ok) {
+          const firstRecipient = validRecipients[0].email;
+          console.log(`[MSG91 Email] ✅ Email dispatched via global_otp fallback to ${firstRecipient}`);
+          return { success: true, messageId: fbData?.data?.unique_id, data: fbData };
+        }
+      }
+
       console.warn("[MSG91 Email] API returned error status:", response.status, data);
       return {
         success: false,
@@ -251,6 +274,16 @@ export async function sendMsg91EmailOtp(params: {
     to: { name: customerName, email: params.email },
     subject,
     html,
+    templateId: process.env.MSG91_EMAIL_OTP_TEMPLATE_ID || "global_otp",
+    variables: {
+      otp: params.otp,
+      company_name: "FAB CLEAN",
+      app_name: "FAB CLEAN",
+      name: customerName,
+    },
+    domain: process.env.MSG91_EMAIL_DOMAIN || DEFAULT_DOMAIN,
+    fromEmail: process.env.MSG91_FROM_EMAIL || DEFAULT_FROM_EMAIL,
+    fromName: "FAB CLEAN",
   });
 }
 

@@ -232,6 +232,19 @@ export async function updateCustomerById(customerId: string, payload: Record<str
   return rows[0] ?? null;
 }
 
+export async function createCustomer(payload: Record<string, unknown>): Promise<CustomerRecord | null> {
+  const rows = await request<CustomerRecord[]>(
+    "/rest/v1/customers",
+    "POST",
+    payload,
+    {
+      Prefer: "return=representation",
+    },
+  );
+
+  return rows[0] ?? null;
+}
+
 export async function fetchOrdersByPhone(phone: string): Promise<PublicOrderRecord[]> {
   const cleanPhone = normalizePhone(phone);
   const customer = await fetchCustomerByPhone(cleanPhone);

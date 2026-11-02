@@ -146,7 +146,7 @@ router.post("/wallet/verify-recharge", requireAuth, async (req, res) => {
           customerName: customer.name || "Customer",
           amount: 0,
           transactionId: razorpayPaymentId,
-          orderNumber: orderId,
+          orderNumber: razorpayOrderId,
           failureReason: "Payment verification signature mismatch / declined",
         });
       }
@@ -317,7 +317,7 @@ router.post("/orders/:id/verify-pay", requireAuth, async (req, res) => {
           customerName: customer.name || "Customer",
           amount: 0,
           transactionId: razorpayPaymentId,
-          orderNumber: orderId,
+          orderNumber: razorpayOrderId,
           failureReason: "Payment verification signature mismatch / declined",
         });
       }
@@ -461,6 +461,7 @@ router.post("/orders/:id/pay-with-wallet", requireAuth, async (req, res) => {
       });
     }
 
+    const newWalletBalance = currentWallet - amountToPay;
     const finalMethod = currentAdvance > 0 ? `${(order as any).payment_method || "credit"} + wallet` : "wallet";
 
     // 1. Mark order as PAID via wallet
