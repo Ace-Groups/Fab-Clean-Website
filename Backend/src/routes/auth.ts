@@ -234,8 +234,10 @@ router.post("/auth/send-otp", async (req, res) => {
     const widgetId = process.env.MSG91_WIDGET_ID || "36637a6f636d333133343232";
     const tokenAuth = process.env.MSG91_OTP_VERIFICATION_TOKEN || process.env.MSG91_TOKEN_AUTH || "491266TQuxkGH8q69c54b24P1";
     let widgetReqId: string | undefined;
+    let smsSent = false;
+    let waSent = false;
 
-    // 1. Dispatch SMS OTP via MSG91 Widget API (MSG91 pre-approved DLT route, delivers SMS reliably)
+    // 1. Dispatch SMS OTP via MSG91 Widget API (MSG91 pre-approved DLT route)
     try {
       const widgetRes = await fetch("https://api.msg91.com/api/v5/widget/sendOtp", {
         method: "POST",
@@ -250,25 +252,24 @@ router.post("/auth/send-otp", async (req, res) => {
         }),
       });
       const widgetJson: any = await widgetRes.json().catch(() => null);
-      if (widgetJson?.type === "success" && widgetJson?.message) {
-        widgetReqId = String(widgetJson.message);
-        req.log.info({ phone: phone.slice(-4), widgetReqId }, "MSG91 Widget SMS OTP sent");
+      if (
+        (widgetRes.ok && (widgetJson?.type === "success" || widgetJson?.status === "success" || widgetJson?.message)) ||
+        (widgetJson && !widgetJson?.hasError && widgetJson?.message)
+      ) {
+        widgetReqId = typeof widgetJson.message === "string" ? widgetJson.message : undefined;
+        smsSent = true;
+        req.log.info({ phone: phone.slice(-4), widgetReqId }, "MSG91 Widget SMS OTP sent successfully");
+      } else {
+        req.log.warn({ phone: phone.slice(-4), response: widgetJson }, "MSG91 Widget SMS OTP failed, trying MSG91 SendOTP fallback");
       }
     } catch (wErr) {
       req.log.warn({ phone: phone.slice(-4), err: wErr }, "MSG91 Widget SMS OTP send error");
     }
 
-    const session = createOtpSession(phone, otp, widgetReqId);
-    otpSessions.set(session.id, session);
-    latestOtpSessionByPhone.set(phone, session.id);
-
-    // 2. Dispatch WhatsApp OTP as parallel instant channel
-    const whatsappPromise = sendWhatsAppOtp(phone, otp, authKey);
-
-    // 3. Dispatch SMS via legacy SendOTP only if specifically enabled or as fallback
-    const legacyEnabled = process.env.MSG91_SEND_OTP_LEGACY === "true";
-    const smsPromise = legacyEnabled
-      ? fetch("https://control.msg91.com/api/v5/otp", {
+    // 2. If Widget API failed, try MSG91 SendOTP as the secondary SMS route
+    if (!smsSent) {
+      try {
+        const smsRes = await fetch("https://control.msg91.com/api/v5/otp", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -280,27 +281,50 @@ router.post("/auth/send-otp", async (req, res) => {
             otp: otp,
             otp_expiry: 10,
           }),
-        }).then(async (res) => {
-          const text = await res.text();
-          req.log.info({ status: res.status, text }, "MSG91 SMS OTP response");
-          return res.ok;
-        }).catch((err) => {
-          req.log.warn({ err }, "MSG91 SMS OTP fetch error");
-          return false;
-        })
-      : Promise.resolve(Boolean(widgetReqId));
+        });
+        const smsJson: any = await smsRes.json().catch(() => null);
+        if (smsRes.ok && (smsJson?.type === "success" || smsJson?.status === "success" || !smsJson?.hasError)) {
+          smsSent = true;
+          req.log.info({ phone: phone.slice(-4) }, "MSG91 SendOTP SMS OTP sent successfully");
+        } else {
+          req.log.warn({ phone: phone.slice(-4), response: smsJson }, "MSG91 SendOTP SMS OTP returned non-success");
+        }
+      } catch (smsErr) {
+        req.log.warn({ phone: phone.slice(-4), err: smsErr }, "MSG91 SendOTP fetch error");
+      }
+    }
 
-    const [waSent, legacySmsSent] = await Promise.all([whatsappPromise, smsPromise]);
+    // 3. Fallback: ONLY if MSG91 SMS OTP failed on both routes, trigger WhatsApp OTP
+    if (!smsSent) {
+      req.log.warn({ phone: phone.slice(-4) }, "MSG91 SMS/OTP failed on both routes. Triggering WhatsApp OTP fallback...");
+      waSent = await sendWhatsAppOtp(phone, otp, authKey);
+      if (waSent) {
+        req.log.info({ phone: phone.slice(-4) }, "WhatsApp OTP fallback delivered successfully");
+      } else {
+        req.log.error({ phone: phone.slice(-4) }, "All OTP delivery channels (SMS + WhatsApp) failed");
+      }
+    }
+
+    const session = createOtpSession(phone, otp, widgetReqId);
+    otpSessions.set(session.id, session);
+    latestOtpSessionByPhone.set(phone, session.id);
+
+    const primaryChannel = smsSent ? "sms" : waSent ? "whatsapp" : "sms";
+    const userMessage = smsSent
+      ? "OTP sent successfully via SMS."
+      : waSent
+        ? "OTP sent successfully to your WhatsApp."
+        : "OTP dispatch initiated.";
 
     const payload = {
       sessionId: session.id,
-      method: "sms" as const,
-      message: "OTP sent successfully via SMS.",
+      method: primaryChannel as "sms" | "whatsapp",
+      message: userMessage,
       expiresInSec: OTP_EXPIRY_SEC,
       resendCooldownSec: OTP_RESEND_COOLDOWN_SEC,
       expiresIn: OTP_EXPIRY_SEC,
       channels: {
-        sms: Boolean(widgetReqId || legacySmsSent),
+        sms: smsSent,
         whatsapp: waSent,
       },
     };

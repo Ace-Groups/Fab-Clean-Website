@@ -34,7 +34,7 @@ export interface Msg91EmailResult {
 }
 
 const DEFAULT_AUTH_KEY = process.env.MSG91_AUTH_KEY || "491266AqsX3mD29Cew69c118abP1";
-const DEFAULT_FROM_EMAIL = process.env.MSG91_FROM_EMAIL || process.env.SMTP_FROM_EMAIL || "otp@mail.myfabclean.com";
+const DEFAULT_FROM_EMAIL = process.env.MSG91_FROM_EMAIL || process.env.SMTP_FROM_EMAIL || "dobi@mail.myfabclean.com";
 const DEFAULT_FROM_NAME = process.env.MSG91_FROM_NAME || "Fab Clean";
 const DEFAULT_DOMAIN = process.env.MSG91_EMAIL_DOMAIN || "mail.myfabclean.com";
 const ACE_DIGITAL_URL = "https://www.acedigital.cc";
@@ -410,6 +410,19 @@ export async function sendMsg91PaymentSuccessEmail(params: {
     to: { name: customerName, email: params.customerEmail },
     subject,
     html,
+    templateId: process.env.MSG91_EMAIL_INVOICE_TEMPLATE_ID || "template_23_03_2026_20_03_4",
+    variables: {
+      customer_name: customerName,
+      order_number: cleanOrder,
+      amount: amountStr,
+      transaction_id: params.transactionId,
+      date: dateStr,
+      company_name: "FAB CLEAN",
+      receipt_url: params.receiptPdfUrl || `https://myfabclean.com/receipt/${cleanOrder}`,
+    },
+    domain: process.env.MSG91_EMAIL_DOMAIN || DEFAULT_DOMAIN,
+    fromEmail: process.env.MSG91_FROM_EMAIL || DEFAULT_FROM_EMAIL,
+    fromName: "FAB CLEAN",
   });
 }
 
@@ -530,6 +543,19 @@ export async function sendMsg91PaymentFailedEmail(params: {
     to: { name: customerName, email: params.customerEmail },
     subject,
     html,
+    templateId: process.env.MSG91_EMAIL_INVOICE_TEMPLATE_ID || "template_23_03_2026_20_03_4",
+    variables: {
+      customer_name: customerName,
+      order_number: cleanOrder,
+      amount: amountStr,
+      transaction_id: params.transactionId,
+      date: dateStr,
+      company_name: "FAB CLEAN",
+      receipt_url: params.receiptPdfUrl || `https://myfabclean.com/receipt/${cleanOrder}`,
+    },
+    domain: process.env.MSG91_EMAIL_DOMAIN || DEFAULT_DOMAIN,
+    fromEmail: process.env.MSG91_FROM_EMAIL || DEFAULT_FROM_EMAIL,
+    fromName: "FAB CLEAN",
   });
 }
 
