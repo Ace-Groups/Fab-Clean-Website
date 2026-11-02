@@ -361,6 +361,7 @@ router.post("/auth/verify-otp", async (req, res) => {
       // 1. Verify via MSG91 Widget API
       if (session?.widgetReqId && authKey) {
         try {
+          const tokenAuth = process.env.MSG91_OTP_VERIFICATION_TOKEN || process.env.MSG91_TOKEN_AUTH || "491266TQuxkGH8q69c54b24P1";
           const widgetVerifyRes = await fetch("https://api.msg91.com/api/v5/widget/verifyOtp", {
             method: "POST",
             headers: {
@@ -369,6 +370,7 @@ router.post("/auth/verify-otp", async (req, res) => {
             },
             body: JSON.stringify({
               widgetId,
+              tokenAuth,
               reqId: session.widgetReqId,
               otp: otp.trim(),
             }),
