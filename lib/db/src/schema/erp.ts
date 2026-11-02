@@ -25,3 +25,24 @@ export const erpOrders = pgTable("orders", {
   items: jsonb("items").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const erpEmployees = pgTable("employees", {
+  id: varchar("id").primaryKey(),
+  employeeId: varchar("employee_id"),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  email: text("email"),
+  phone: text("phone"),
+  role: text("role"),
+  systemRole: text("system_role"),
+  status: text("status"),
+  password: text("password"),
+  position: text("position"),
+  department: text("department"),
+  storeId: varchar("store_id"),
+  factoryId: varchar("factory_id"),
+  avatarUrl: text("avatar_url"),
+  profileImage: text("profile_image"),
+  createdAt: timestamp("created_at"),
+  updatedAt: timestamp("updated_at"),
+});

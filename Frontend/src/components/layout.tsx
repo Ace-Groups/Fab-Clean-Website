@@ -62,11 +62,11 @@ function ProfileDropdown() {
                   className="w-full justify-start rounded-xl px-3 font-normal"
                   onClick={() => {
                     setOpen(false);
-                    setLocation("/dashboard");
+                    window.location.href = "https://app.myfabclean.com";
                   }}
                 >
                   <User className="mr-2 h-4 w-4" />
-                  Dashboard
+                  Customer Portal & App
                 </Button>
                 <Button 
                   variant="ghost" 
@@ -74,10 +74,10 @@ function ProfileDropdown() {
                   className="w-full justify-start rounded-xl px-3 font-normal"
                   onClick={() => {
                     setOpen(false);
-                    setLocation("/dashboard/orders");
+                    window.location.href = "https://app.myfabclean.com";
                   }}
                 >
-                  Order History
+                  Order History & Tracking
                 </Button>
                 <Button 
                   variant="ghost" 
@@ -178,9 +178,9 @@ export function Navbar() {
             {isAuthenticated ? (
               <ProfileDropdown />
             ) : (
-              <Link href="/login" data-cursor-label="Login">
+              <a href="https://app.myfabclean.com" data-cursor-label="Login">
                 <Button variant="ghost" size="sm">Sign in</Button>
-              </Link>
+              </a>
             )}
             <Link href="/schedule-pickup" data-cursor-label="Book">
               <Button size="sm">Schedule pickup</Button>
@@ -227,10 +227,12 @@ export function Navbar() {
                     <Button 
                       variant="outline" 
                       className="w-full justify-start text-left" 
-                      onClick={() => setLocation("/dashboard")}
+                      onClick={() => {
+                        window.location.href = "https://app.myfabclean.com";
+                      }}
                     >
                       <User className="mr-2 h-4 w-4" />
-                      Dashboard
+                      Customer Portal & App
                     </Button>
                     <Button 
                       variant="ghost" 
@@ -242,9 +244,9 @@ export function Navbar() {
                     </Button>
                   </div>
                 ) : (
-                  <Link href="/login">
-                    <Button variant="ghost" className="w-full">Login</Button>
-                  </Link>
+                  <a href="https://app.myfabclean.com" className="w-full">
+                    <Button variant="ghost" className="w-full">Sign in to Portal</Button>
+                  </a>
                 )}
                 <Link href="/schedule-pickup">
                   <Button className="w-full">Schedule pickup</Button>

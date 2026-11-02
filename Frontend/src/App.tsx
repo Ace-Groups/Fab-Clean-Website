@@ -18,6 +18,7 @@ const SchedulePickup = lazy(() => import("@/pages/schedule-pickup"));
 const BookNow = lazy(() => import("@/pages/book-now"));
 const Dashboard = lazy(() => import("@/pages/dashboard/index"));
 const TrackOrder = lazy(() => import("@/pages/track-order"));
+const PublicTrackOrder = lazy(() => import("@/pages/public-track-order"));
 const Feedback = lazy(() => import("@/pages/feedback"));
 const Reviews = lazy(() => import("@/pages/reviews"));
 const Sitemap = lazy(() => import("@/pages/sitemap"));
@@ -54,6 +55,8 @@ function Router() {
         <Route path="/diwali-offer" component={BookNow} />
         <Route path="/track-order" component={TrackOrder} />
         <Route path="/track-order/:identifier" component={TrackOrder} />
+        <Route path="/trackorder" component={PublicTrackOrder} />
+        <Route path="/trackorder/:orderNumber" component={PublicTrackOrder} />
         <Route path="/feedback" component={Feedback} />
         <Route path="/feedback/:identifier" component={Feedback} />
         <Route path="/reviews" component={Reviews} />

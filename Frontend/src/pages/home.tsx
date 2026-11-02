@@ -130,10 +130,10 @@ export default function Home() {
         <div className="container-wide">
           <FadeIn>
             <h2 className="max-w-2xl font-display text-3xl text-ink sm:text-4xl">
-              Three calm steps. No package maze.
+              Effortless Care. Uncompromising Standards.
             </h2>
             <p className="mt-4 max-w-xl text-base leading-7 text-muted-foreground">
-              Book the window. We handle garments together at pickup. You confirm before cleaning starts.
+              A bespoke dry cleaning and laundry service crafted for modern wardrobes. Seamless collection, fabric-first technology, and transparent tracking every step of the way.
             </p>
           </FadeIn>
           <div className="mt-12 grid gap-10 md:grid-cols-3">

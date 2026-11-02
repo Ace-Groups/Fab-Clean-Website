@@ -18,21 +18,10 @@ import {
 export default function Login() {
   const [location, setLocation] = useLocation();
   const { isAuthenticated, setToken } = useAuth();
-  const [phone, setPhone] = useState("");
-  const [isBooting, setIsBooting] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const widgetStarted = useRef(false);
-
-  const redirectTarget = useMemo(() => {
-    const params = new URLSearchParams(location.split("?")[1] || "");
-    return params.get("redirect") || "/dashboard/orders";
-  }, [location]);
 
   useEffect(() => {
-    if (isAuthenticated) {
-      setLocation(redirectTarget);
-    }
-  }, [isAuthenticated, redirectTarget, setLocation]);
+    window.location.replace("https://app.myfabclean.com");
+  }, []);
 
   async function completeWithAccessToken(accessToken: string, phoneDigits: string) {
     setIsVerifying(true);

@@ -21,9 +21,9 @@ export const BRAND = {
   email: "info@myfabclean.in",
   emailAlt: "myfabclean@gmail.com",
   hours: "Mon to Sat, 10:00 AM to 8:00 PM",
-  heroTitle: "Doorstep care, without the form farm.",
+  heroTitle: "Bespoke Garment Care Delivered to Your Doorstep.",
   heroLead:
-    "Schedule a free pickup. Our agent collects garment details at your door — you confirm before we start.",
+    "Schedule a complimentary pickup in seconds. Master dry cleaning, precision steam pressing, and fabric restoration — handled with white-glove care.",
   shortBlurb:
     "Laundry and dry cleaning with free pickup. Book in a minute; we handle the rest at your door.",
   bookingPromise:
@@ -89,20 +89,20 @@ export const PROCESS_STEPS: Array<{
 }> = [
   {
     step: "1",
-    title: "Schedule pickup",
-    description: "Name, phone, address, and a time window. That is all.",
+    title: "Schedule Doorstep Pickup",
+    description: "Choose your convenient date and time window online or via WhatsApp. Our concierge arrives right at your door.",
     icon: MapPin,
   },
   {
     step: "2",
-    title: "Agent at your door",
-    description: "We note garments and services together, then confirm before cleaning starts.",
+    title: "Expert Fabric Inspection",
+    description: "Every garment is tagged, weighed, and examined for delicate fibers with an instant itemized inventory confirmed before processing.",
     icon: Sparkles,
   },
   {
     step: "3",
-    title: "Track and receive",
-    description: "Sign in with your phone to follow status until delivery.",
+    title: "Artisan Care & Pristine Return",
+    description: "Treated with eco-friendly solvents, precision steam pressing, and delivered back to your wardrobe in immaculate condition.",
     icon: CheckCircle2,
   },
 ];

@@ -16,18 +16,49 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(new RegExp("(^|;\\s*)(" + name + ")=([^;]*)"));
+  return match ? decodeURIComponent(match[3]) : null;
+}
+
+function setCrossDomainCookie(name: string, value: string, days: number = 30) {
+  if (typeof document === "undefined") return;
+  const maxAge = days * 24 * 60 * 60;
+  const isProd = window.location.hostname.includes("myfabclean.com");
+  const domainPart = isProd ? "; domain=.myfabclean.com" : "";
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/${domainPart}; max-age=${maxAge}; SameSite=Lax; Secure`;
+}
+
+function deleteCrossDomainCookie(name: string) {
+  if (typeof document === "undefined") return;
+  const isProd = window.location.hostname.includes("myfabclean.com");
+  const domainPart = isProd ? "; domain=.myfabclean.com" : "";
+  document.cookie = `${name}=; path=/${domainPart}; max-age=0; SameSite=Lax; Secure`;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [, setLocation] = useLocation();
   const [token, setTokenState] = useState<string | null>(() => {
-    return localStorage.getItem("fabclean_token");
+    const local = localStorage.getItem("fabclean_token");
+    if (local) return local;
+    const fromCookie = getCookie("fabclean_token");
+    if (fromCookie) {
+      localStorage.setItem("fabclean_token", fromCookie);
+      return fromCookie;
+    }
+    return null;
   });
   const queryClient = useQueryClient();
 
   const setToken = (newToken: string | null) => {
     if (newToken) {
       localStorage.setItem("fabclean_token", newToken);
+      setCrossDomainCookie("fabclean_token", newToken, 30);
     } else {
       localStorage.removeItem("fabclean_token");
+      deleteCrossDomainCookie("fabclean_token");
+      deleteCrossDomainCookie("fabclean_user");
     }
     setTokenState(newToken);
   };

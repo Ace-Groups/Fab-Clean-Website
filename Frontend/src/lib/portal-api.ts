@@ -52,3 +52,76 @@ export async function fetchPortalPickups(token: string, since?: string) {
   const suffix = since ? `?since=${encodeURIComponent(since)}` : "";
   return request<{ success: boolean; data: PortalPickup[]; meta: { total: number } }>(`/api/pickups${suffix}`, token);
 }
+
+export async function fetchWalletTransactions(token: string) {
+  return request<{ success: boolean; data: any[] }>("/api/wallet/transactions", token);
+}
+
+export async function createWalletRechargeOrder(token: string, amount: number) {
+  return request<{
+    success: boolean;
+    data: {
+      orderId: string;
+      amount: number;
+      currency: string;
+      keyId: string;
+      customer: { name: string; email: string; phone: string };
+    };
+  }>("/api/wallet/create-recharge-order", token, {
+    method: "POST",
+    body: JSON.stringify({ amount }),
+  });
+}
+
+export async function verifyWalletRecharge(
+  token: string,
+  params: {
+    razorpayOrderId: string;
+    razorpayPaymentId: string;
+    razorpaySignature: string;
+    amount: number;
+  }
+) {
+  return request<{ success: boolean; message: string; data: any }>("/api/wallet/verify-recharge", token, {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export async function createOrderPayOrder(token: string, orderId: string) {
+  return request<{
+    success: boolean;
+    data: {
+      orderId: string;
+      amount: number;
+      currency: string;
+      keyId: string;
+      orderNumber: string;
+      totalAmount: number;
+      customer: { name: string; email: string; phone: string };
+    };
+  }>(`/api/orders/${orderId}/create-pay-order`, token, {
+    method: "POST",
+  });
+}
+
+export async function verifyOrderPayment(
+  token: string,
+  orderId: string,
+  params: {
+    razorpayOrderId: string;
+    razorpayPaymentId: string;
+    razorpaySignature: string;
+  }
+) {
+  return request<{ success: boolean; message: string; data: any }>(`/api/orders/${orderId}/verify-pay`, token, {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export async function payOrderWithWallet(token: string, orderId: string) {
+  return request<{ success: boolean; message: string; data: any }>(`/api/orders/${orderId}/pay-with-wallet`, token, {
+    method: "POST",
+  });
+}

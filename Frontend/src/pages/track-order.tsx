@@ -68,22 +68,22 @@ export default function TrackOrder() {
   }
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    // If user accessed via direct tracking link (e.g. from WhatsApp), allow viewing without login
+    if (!isAuthenticated && !routeIdentifier) {
       setLocation(loginRedirect);
     }
-  }, [isAuthenticated, loginRedirect, setLocation]);
+  }, [isAuthenticated, routeIdentifier, loginRedirect, setLocation]);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
     const legacyIdentifier = new URLSearchParams(window.location.search).get("orderId") || "";
     const initialIdentifier = routeIdentifier || legacyIdentifier;
     if (!initialIdentifier.trim()) return;
     setIdentifier(initialIdentifier);
     if (lastRequestedIdentifier.current === initialIdentifier.toUpperCase()) return;
     void lookupOrder(initialIdentifier, { syncUrl: true, showErrors: true });
-  }, [routeIdentifier, isAuthenticated]);
+  }, [routeIdentifier]);
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated && !routeIdentifier) {
     return (
       <AppLayout>
         <div className="page-shell">

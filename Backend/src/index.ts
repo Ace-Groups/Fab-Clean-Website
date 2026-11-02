@@ -21,3 +21,14 @@ if (Number.isNaN(port) || port <= 0) {
 app.listen(port, "0.0.0.0", () => {
   logger.info({ port }, "Server listening on 0.0.0.0");
 });
+
+import { cleanupExpiredStainPhotos } from "./lib/storage-cleanup.js";
+
+// Run 100-day stain photo cleanup on boot and every 24 hours
+setTimeout(() => {
+  cleanupExpiredStainPhotos(logger);
+}, 15000);
+setInterval(() => {
+  cleanupExpiredStainPhotos(logger);
+}, 24 * 60 * 60 * 1000);
+
