@@ -548,30 +548,9 @@ router.post("/users/verify-email-otp", requireAuth, async (req, res) => {
     const isDemo = rawEmail === "kavinbalaji365@gmail.com" || phone.includes("8825702072") || phone.includes("9087172072");
     let isMatch = (cached && cached.code === otp && Date.now() <= cached.expiresAt) || (isDemo && (otp === "3223" || otp === "123456"));
 
-    // Verify against Supabase Auth OTP verification if not matched in cache
+    // Verified against MSG91 dispatched email OTP cache (replaces Supabase Auth)
     if (!isMatch) {
-      try {
-        const baseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
-        const serviceKey = process.env.SUPABASE_SERVICE_KEY;
-        if (baseUrl && serviceKey) {
-          const verifyRes = await fetch(`${baseUrl}/auth/v1/verify`, {
-            method: "POST",
-            headers: {
-              apikey: serviceKey,
-              Authorization: `Bearer ${serviceKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              type: "email",
-              token: otp,
-              email: rawEmail,
-            }),
-          });
-          if (verifyRes.ok) {
-            isMatch = true;
-          }
-        }
-      } catch (_) {}
+      req.log.warn({ email: rawEmail, isDemo }, "[MSG91 Email] Verification code mismatch or expired");
     }
 
     if (!isMatch) {
