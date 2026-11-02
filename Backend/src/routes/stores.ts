@@ -5,6 +5,23 @@ import { fetchAppStores } from "../lib/supabase-admin.js";
 
 const router: IRouter = Router();
 
+/** Customer-facing branch slugs only (legacy UUID/short-name rows excluded). */
+const CANONICAL_STORE_SLUG_ORDER = [
+  "pollachi",
+  "suleeshwaranpatti",
+  "udumalpet",
+  "kinathukadavu",
+] as const;
+const CANONICAL_STORE_SLUGS = new Set<string>(CANONICAL_STORE_SLUG_ORDER);
+
+function isCustomerFacingStore(store: { slug?: string | null; name?: string | null }): boolean {
+  const slug = String(store.slug || "").toLowerCase().trim();
+  const name = String(store.name || "").trim();
+  if (!CANONICAL_STORE_SLUGS.has(slug)) return false;
+  // Prefer Fab Clean–prefixed display names; drop legacy short labels (Pollachi, etc.).
+  return /^fab\s*clean\s*-/i.test(name);
+}
+
 router.get("/stores", async (req, res) => {
   try {
     const [stores, appStores] = await Promise.all([
@@ -48,9 +65,21 @@ router.get("/stores", async (req, res) => {
       });
     }
 
+    const data = Array.from(mergedBySlug.values())
+      .filter(isCustomerFacingStore)
+      .sort((a, b) => {
+        const aOrder = CANONICAL_STORE_SLUG_ORDER.indexOf(
+          String(a.slug).toLowerCase() as (typeof CANONICAL_STORE_SLUG_ORDER)[number],
+        );
+        const bOrder = CANONICAL_STORE_SLUG_ORDER.indexOf(
+          String(b.slug).toLowerCase() as (typeof CANONICAL_STORE_SLUG_ORDER)[number],
+        );
+        return aOrder - bOrder;
+      });
+
     res.json({
       success: true,
-      data: Array.from(mergedBySlug.values()),
+      data,
     });
   } catch (err) {
     req.log.error(err, "Failed to load stores");

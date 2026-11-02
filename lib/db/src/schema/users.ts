@@ -7,6 +7,7 @@ export const usersTable = pgTable("website_users", {
   phone: text("phone").notNull().unique(),
   name: text("name"),
   email: text("email"),
+  avatarUrl: text("avatar_url"),
   customerId: text("customer_id"), // Links to ERP customers table
   addresses: jsonb("addresses").$type<string[]>().default([]),
   isActive: boolean("is_active").notNull().default(true),

@@ -4,20 +4,30 @@ import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Link } from "wouter";
-import { CalendarIcon, CheckCircle2, ChevronLeft, ChevronRight, MapPin, Navigation } from "lucide-react";
+import { CalendarIcon, CheckCircle2, ChevronLeft, ChevronRight, MapPin, Navigation, User } from "lucide-react";
 import { format } from "date-fns";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
-import { useSchedulePickup } from "@workspace/api-client-react";
+import { useGetProfile, useSchedulePickup } from "@workspace/api-client-react";
 import { AppLayout } from "@/components/layout";
 import { SEO } from "@/components/seo";
 import { Button, Input, Textarea } from "@/components/ui";
-import { LocationInput } from "@/components/location-input";
+import { StructuredAddressFields } from "@/components/structured-address-fields";
 import { useToast } from "@/hooks/use-toast";
 import { DEFAULT_STORES } from "@/lib/site-catalog";
 import { BRAND, DEFAULT_PICKUP_SERVICE } from "@/lib/brand";
 import { findNearestStore } from "@/lib/geo";
 import { useNearestStore } from "@/hooks/use-nearest-store";
+import { useAuth } from "@/hooks/use-auth";
+import { lookupCustomer } from "@/lib/public-api";
+import {
+  EMPTY_STRUCTURED_ADDRESS,
+  formatStructuredAddress,
+  isStructuredAddressComplete,
+  parseAddressString,
+  type StructuredAddress,
+} from "@/lib/address";
+import { track, trackPageView } from "@/lib/analytics";
 import {
   Dialog,
   DialogContent,
@@ -109,11 +119,25 @@ export default function SchedulePickup() {
   const [step, setStep] = useState(1);
   const [success, setSuccess] = useState<{ ref: string; msg: string } | null>(null);
   const { toast } = useToast();
+  const { isAuthenticated } = useAuth();
+  const { data: profileResponse } = useGetProfile({
+    query: { enabled: isAuthenticated, retry: false } as never,
+  });
+  const profile = profileResponse?.data as
+    | { name?: string; phone?: string; addresses?: string[] }
+    | undefined;
+
+  const [structuredAddress, setStructuredAddress] = useState<StructuredAddress>({
+    ...EMPTY_STRUCTURED_ADDRESS,
+  });
+  const [showAddressErrors, setShowAddressErrors] = useState(false);
   const [savedAddresses, setSavedAddresses] = useState<string[]>([]);
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const branchManualOverride = useRef(false);
   const [autoBranchSlug, setAutoBranchSlug] = useState<string | null>(null);
   const [showGeoPrompt, setShowGeoPrompt] = useState(false);
   const geoPromptDismissed = useRef(false);
+  const profilePrefillDone = useRef(false);
 
   const {
     stores: storesData,
@@ -137,6 +161,7 @@ export default function SchedulePickup() {
     watch,
     trigger,
     setValue,
+    getValues,
     formState: { errors, isValid },
   } = useForm<PickupForm>({
     resolver: zodResolver(pickupSchema),
@@ -144,6 +169,9 @@ export default function SchedulePickup() {
     defaultValues: {
       branch: "",
       timeSlot: getSmartTimeSlot(),
+      name: "",
+      phone: "",
+      address: "",
     },
   });
 
@@ -160,14 +188,21 @@ export default function SchedulePickup() {
     [setValue, storesData],
   );
 
-  const handleLocationDetected = (lat: number, lon: number) => {
-    persistCoords(lat, lon, "address");
-    applyNearestBranch(lat, lon);
-  };
+  const handleCoords = useCallback(
+    (lat: number, lon: number) => {
+      setCoords({ lat, lng: lon });
+      persistCoords(lat, lon, "address");
+      applyNearestBranch(lat, lon);
+    },
+    [applyNearestBranch, persistCoords],
+  );
 
   const values = watch();
   const phoneVal = watch("phone");
-  const addressVal = watch("address");
+
+  useEffect(() => {
+    trackPageView("/schedule-pickup", "Schedule Pickup | Fab Clean");
+  }, []);
 
   useEffect(() => {
     if (visitorGeo && !branchManualOverride.current) {
@@ -181,52 +216,69 @@ export default function SchedulePickup() {
     return () => window.clearTimeout(timer);
   }, [visitorGeo]);
 
+  // Logged-in: skip re-asking name/phone; prefill identity + saved addresses.
   useEffect(() => {
-    if (!addressVal || addressVal.length < 12) return;
-    const timer = window.setTimeout(async () => {
-      try {
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressVal)}&countrycodes=in&limit=1`,
-        );
-        if (!response.ok) return;
-        const data = (await response.json()) as Array<{ lat: string; lon: string }>;
-        if (!data[0]?.lat || !data[0]?.lon) return;
-        const lat = parseFloat(data[0].lat);
-        const lon = parseFloat(data[0].lon);
-        persistCoords(lat, lon, "address");
-        applyNearestBranch(lat, lon);
-      } catch {
-        /* optional refinement */
-      }
-    }, 1200);
-    return () => window.clearTimeout(timer);
-  }, [addressVal, applyNearestBranch, persistCoords]);
+    if (!isAuthenticated || !profile || profilePrefillDone.current) return;
+    profilePrefillDone.current = true;
+
+    const phone = String(profile.phone || "").replace(/\D/g, "").slice(-10);
+    const name = String(profile.name || "").trim();
+    if (name) setValue("name", name, { shouldValidate: true });
+    if (phone.length === 10) setValue("phone", phone, { shouldValidate: true });
+
+    const addresses = Array.isArray(profile.addresses) ? profile.addresses.filter(Boolean) : [];
+    setSavedAddresses(addresses);
+    if (addresses[0]) {
+      const parsed = parseAddressString(addresses[0]);
+      setStructuredAddress(parsed);
+      setValue("address", formatStructuredAddress(parsed) || addresses[0], { shouldValidate: true });
+    }
+    track("pickup_authed_prefill", { has_address: addresses.length > 0 });
+  }, [isAuthenticated, profile, setValue]);
 
   useEffect(() => {
-    if (phoneVal?.length === 10) {
-      fetch(`/api/pickups/customer-lookup?phone=${phoneVal}`)
-        .then((res) => res.json())
-        .then((result) => {
-          if (result.success && result.data) {
-            if (result.data.name) setValue("name", result.data.name, { shouldValidate: true });
-            if (result.data.addresses?.length) {
-              setSavedAddresses(result.data.addresses);
-              if (!values.address) {
-                setValue("address", result.data.addresses[0], { shouldValidate: true });
-              }
-            } else {
-              setSavedAddresses([]);
-            }
-          }
-        })
-        .catch(() => undefined);
+    const composed = formatStructuredAddress(structuredAddress);
+    if (composed.length >= 10) {
+      setValue("address", composed, { shouldValidate: true });
+    } else if (!composed) {
+      setValue("address", "", { shouldValidate: true });
     }
-  }, [phoneVal, setValue]);
+  }, [structuredAddress, setValue]);
+
+  useEffect(() => {
+    if (isAuthenticated) return;
+    if (phoneVal?.length !== 10) return;
+
+    let cancelled = false;
+    void lookupCustomer(phoneVal).then((data) => {
+      if (cancelled || !data) return;
+      if (data.name) setValue("name", data.name, { shouldValidate: true });
+      if (data.addresses?.length) {
+        setSavedAddresses(data.addresses);
+        if (!getValues("address") && data.addresses[0]) {
+          const parsed = parseAddressString(data.addresses[0]);
+          setStructuredAddress(parsed);
+          setValue("address", formatStructuredAddress(parsed) || data.addresses[0], {
+            shouldValidate: true,
+          });
+        }
+      } else {
+        setSavedAddresses([]);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [phoneVal, isAuthenticated, setValue, getValues]);
 
   const { mutate: schedule, isPending } = useSchedulePickup({
     mutation: {
-      onSuccess: (result) => setSuccess({ ref: result.data.bookingReference, msg: result.data.message }),
+      onSuccess: (result) => {
+        track("pickup_booked", { branch: getValues("branch") });
+        setSuccess({ ref: result.data.bookingReference, msg: result.data.message });
+      },
       onError: () => {
+        track("pickup_book_failed");
         toast({
           title: "Unable to schedule pickup",
           description: "Please try again in a moment.",
@@ -237,31 +289,29 @@ export default function SchedulePickup() {
   });
 
   const nextStep = async () => {
-    const ok = await trigger(["name", "phone", "address"]);
-    if (!ok) return;
-
-    const geo = visitorGeo;
-    if (geo) {
-      applyNearestBranch(geo.lat, geo.lng);
-    } else if (addressVal && addressVal.length >= 12) {
-      try {
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressVal)}&countrycodes=in&limit=1`,
-        );
-        if (response.ok) {
-          const data = (await response.json()) as Array<{ lat: string; lon: string }>;
-          if (data[0]?.lat && data[0]?.lon) {
-            const lat = parseFloat(data[0].lat);
-            const lon = parseFloat(data[0].lon);
-            persistCoords(lat, lon, "address");
-            applyNearestBranch(lat, lon);
-          }
-        }
-      } catch {
-        /* fall through */
-      }
+    setShowAddressErrors(true);
+    if (!isStructuredAddressComplete(structuredAddress)) {
+      toast({
+        title: "Complete the address",
+        description: "House/street, pincode, city, and state are required.",
+        variant: "destructive",
+      });
+      return;
     }
 
+    const composed = formatStructuredAddress(structuredAddress);
+    setValue("address", composed, { shouldValidate: true });
+
+    const fields = isAuthenticated ? (["address"] as const) : (["name", "phone", "address"] as const);
+    const ok = await trigger([...fields]);
+    if (!ok) return;
+
+    const geo = coords || visitorGeo;
+    if (geo) {
+      applyNearestBranch(geo.lat, geo.lng);
+    }
+
+    track("pickup_step", { step: 2, authed: isAuthenticated });
     setStep(2);
   };
 
@@ -269,8 +319,11 @@ export default function SchedulePickup() {
     schedule({
       data: {
         ...formValues,
+        address: formatStructuredAddress(structuredAddress) || formValues.address,
+        addressLat: coords?.lat ?? visitorGeo?.lat,
+        addressLng: coords?.lng ?? visitorGeo?.lng,
         services: [DEFAULT_PICKUP_SERVICE],
-      } as any,
+      } as never,
     });
   };
 
@@ -281,6 +334,7 @@ export default function SchedulePickup() {
           title="Pickup confirmed | Fab Clean"
           description="Your Fab Clean pickup request has been saved."
           canonical="https://myfabclean.com/schedule-pickup"
+          keywords="Fab Clean pickup confirmed, laundry booking Pollachi"
         />
         <div className="page-shell">
           <section className="container-tight section-padding">
@@ -298,9 +352,15 @@ export default function SchedulePickup() {
                 <p className="mt-3 text-2xl font-semibold text-ink">{success.ref}</p>
               </div>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
-                <Link href="/login?redirect=%2Fdashboard%2Fbookings">
-                  <Button>Sign in to follow along</Button>
-                </Link>
+                {isAuthenticated ? (
+                  <Link href="/dashboard/bookings">
+                    <Button>Open bookings</Button>
+                  </Link>
+                ) : (
+                  <Link href="/login?redirect=%2Fdashboard%2Fbookings">
+                    <Button>Sign in to follow along</Button>
+                  </Link>
+                )}
                 <Link href="/">
                   <Button variant="outline">Back home</Button>
                 </Link>
@@ -316,8 +376,16 @@ export default function SchedulePickup() {
     <AppLayout>
       <SEO
         title="Schedule Pickup | Fab Clean"
-        description="Book a free Fab Clean pickup with just name, phone, address, and a time window."
+        description="Book a free Fab Clean pickup. Signed-in customers skip name and phone — we use your profile and nearest branch."
         canonical="https://myfabclean.com/schedule-pickup"
+        keywords="schedule laundry pickup Pollachi, Fab Clean free pickup, dry cleaning booking Kinathukadavu, Udumalpet laundry pickup"
+        schema={{
+          "@context": "https://schema.org",
+          "@type": "Service",
+          name: "Fab Clean Pickup",
+          provider: { "@type": "LocalBusiness", name: "Fab Clean", url: "https://myfabclean.com" },
+          areaServed: ["Pollachi", "Kinathukadavu", "Udumalpet", "Suleeshwaranpatti"],
+        }}
       />
 
       <div className="page-shell">
@@ -332,7 +400,7 @@ export default function SchedulePickup() {
 
             <div className="mb-6 flex items-center justify-center gap-3 text-sm text-muted-foreground">
               <span className={cn("rounded-full px-3 py-1", step === 1 ? "bg-primary/12 text-primary" : "bg-muted")}>
-                1 · Contact
+                1 · {isAuthenticated ? "Address" : "Contact"}
               </span>
               <span aria-hidden="true" className="h-px w-8 bg-line" />
               <span className={cn("rounded-full px-3 py-1", step === 2 ? "bg-primary/12 text-primary" : "bg-muted")}>
@@ -398,52 +466,73 @@ export default function SchedulePickup() {
                       transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                       className="space-y-4"
                     >
-                      <div className="grid gap-4 sm:grid-cols-2">
-                        <div>
-                          <label className="mb-2 block text-sm font-medium text-ink">Name</label>
-                          <Input placeholder="Your name" {...register("name")} autoComplete="name" />
-                          {errors.name ? <p className="mt-2 text-sm text-red-700">{errors.name.message}</p> : null}
+                      {isAuthenticated ? (
+                        <div className="flex items-start gap-3 rounded-2xl border border-primary/20 bg-primary/8 px-4 py-3">
+                          <User className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                          <div className="min-w-0 text-sm">
+                            <p className="font-medium text-ink">
+                              Booking as {values.name || profile?.name || "you"}
+                            </p>
+                            <p className="mt-0.5 text-muted-foreground">
+                              +91 {values.phone || String(profile?.phone || "").slice(-10)} · name &amp; phone from
+                              your profile
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <label className="mb-2 block text-sm font-medium text-ink">Phone</label>
-                          <Input
-                            placeholder="10-digit mobile"
-                            maxLength={10}
-                            inputMode="numeric"
-                            autoComplete="tel"
-                            {...register("phone")}
-                            onInput={(event) => {
-                              const target = event.currentTarget as HTMLInputElement;
-                              target.value = target.value.replace(/\D/g, "").slice(0, 10);
-                            }}
-                          />
-                          {errors.phone ? <p className="mt-2 text-sm text-red-700">{errors.phone.message}</p> : null}
+                      ) : (
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div>
+                            <label className="mb-2 block text-sm font-medium text-ink">Name</label>
+                            <Input placeholder="Your name" {...register("name")} autoComplete="name" />
+                            {errors.name ? <p className="mt-2 text-sm text-red-700">{errors.name.message}</p> : null}
+                          </div>
+                          <div>
+                            <label className="mb-2 block text-sm font-medium text-ink">Phone</label>
+                            <Input
+                              placeholder="10-digit mobile"
+                              maxLength={10}
+                              inputMode="numeric"
+                              autoComplete="tel"
+                              {...register("phone")}
+                              onInput={(event) => {
+                                const target = event.currentTarget as HTMLInputElement;
+                                target.value = target.value.replace(/\D/g, "").slice(0, 10);
+                              }}
+                            />
+                            {errors.phone ? (
+                              <p className="mt-2 text-sm text-red-700">{errors.phone.message}</p>
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
+                      )}
+
                       <div>
                         <label className="mb-2 block text-sm font-medium text-ink">Pickup address</label>
-                        <LocationInput
-                          name="address"
-                          placeholder="Full address with landmark"
-                          register={register}
-                          setValue={setValue}
-                          watch={watch}
-                          error={errors.address}
-                          onLocationDetected={handleLocationDetected}
+                        <StructuredAddressFields
+                          value={structuredAddress}
+                          onChange={setStructuredAddress}
+                          onCoords={handleCoords}
+                          showErrors={showAddressErrors}
                         />
                         {savedAddresses.length > 0 && (
-                          <div className="mt-3 space-y-2">
+                          <div className="mt-4 space-y-2">
                             <p className="text-xs text-muted-foreground">Saved addresses</p>
                             <div className="flex flex-wrap gap-2">
                               {savedAddresses.map((addr, idx) => (
                                 <button
                                   key={idx}
                                   type="button"
-                                  onClick={() => setValue("address", addr, { shouldValidate: true })}
+                                  onClick={() => {
+                                    const parsed = parseAddressString(addr);
+                                    setStructuredAddress(parsed);
+                                    setValue("address", formatStructuredAddress(parsed) || addr, {
+                                      shouldValidate: true,
+                                    });
+                                  }}
                                   className="rounded-xl border border-line bg-background/50 px-3 py-1.5 text-xs text-ink transition-colors hover:border-primary/40"
                                 >
-                                  {addr.slice(0, 36)}
-                                  {addr.length > 36 ? "…" : ""}
+                                  {addr.slice(0, 42)}
+                                  {addr.length > 42 ? "…" : ""}
                                 </button>
                               ))}
                             </div>

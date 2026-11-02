@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import type { NextFunction, Request, Response } from "express";
 
 export const JWT_SECRET = process.env.JWT_SECRET || process.env.AUTH_SECRET || "fab-clean-jwt-production-secret-2026-suleeshwaranpatti";
+export const AUTH_JWT_SECRET = JWT_SECRET;
 
 export type AuthenticatedUser = {
   userId: string;

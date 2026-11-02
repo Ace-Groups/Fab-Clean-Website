@@ -11,6 +11,29 @@ export interface Store {
   mapHref?: string;
 }
 
+/** Customer-facing branch slugs only (legacy UUID/short-name rows excluded). */
+export const CANONICAL_STORE_SLUGS = [
+  "pollachi",
+  "suleeshwaranpatti",
+  "udumalpet",
+  "kinathukadavu",
+] as const;
+
+export type CanonicalStoreSlug = (typeof CANONICAL_STORE_SLUGS)[number];
+
+const CANONICAL_STORE_SLUG_SET = new Set<string>(CANONICAL_STORE_SLUGS);
+
+/** Keep only Fab Clean–prefixed catalog branches; drop legacy short names / MCET. */
+export function isCustomerFacingStore(store: {
+  slug?: string | null;
+  name?: string | null;
+}): boolean {
+  const slug = String(store.slug || "").toLowerCase().trim();
+  const name = String(store.name || "").trim();
+  if (!CANONICAL_STORE_SLUG_SET.has(slug)) return false;
+  return /^fab\s*clean\s*-/i.test(name);
+}
+
 export const DEFAULT_STORES: Store[] = [
   {
     id: "pollachi",

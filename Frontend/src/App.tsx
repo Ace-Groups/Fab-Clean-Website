@@ -1,10 +1,12 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/hooks/use-auth";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { PointerFeedbackProvider } from "@/components/site";
+import { trackPageView } from "@/lib/analytics";
+import { AppHostGate } from "@/components/app-host-gate";
 
 // Pages
 const Home = lazy(() => import("@/pages/home"));
@@ -14,6 +16,7 @@ const About = lazy(() => import("@/pages/about"));
 const Contact = lazy(() => import("@/pages/contact"));
 const Login = lazy(() => import("@/pages/login"));
 const Register = lazy(() => import("@/pages/register"));
+const Welcome = lazy(() => import("@/pages/welcome"));
 const SchedulePickup = lazy(() => import("@/pages/schedule-pickup"));
 const BookNow = lazy(() => import("@/pages/book-now"));
 const Dashboard = lazy(() => import("@/pages/dashboard/index"));
@@ -37,9 +40,19 @@ const queryClient = new QueryClient({
   },
 });
 
+function AnalyticsListener() {
+  const [location] = useLocation();
+  useEffect(() => {
+    trackPageView(location);
+  }, [location]);
+  return null;
+}
+
 function Router() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <AnalyticsListener />
+      <AppHostGate />
       <Switch>
         <Route path="/" component={Home} />
         <Route path="/services" component={Services} />
@@ -47,6 +60,7 @@ function Router() {
         <Route path="/about" component={About} />
         <Route path="/contact" component={Contact} />
         <Route path="/login" component={Login} />
+        <Route path="/welcome" component={Welcome} />
         <Route path="/register" component={Register} />
         <Route path="/schedule-pickup" component={SchedulePickup} />
         <Route path="/book_now" component={BookNow} />

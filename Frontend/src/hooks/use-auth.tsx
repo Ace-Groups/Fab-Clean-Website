@@ -1,16 +1,25 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useGetProfile, setBaseUrl, setAuthTokenGetter } from "@workspace/api-client-react";
 import { useLocation } from "wouter";
 import { getApiBaseUrl } from "@/lib/api-base";
 
-// Initialize API
 setBaseUrl(getApiBaseUrl());
+
+const TOKEN_KEY = "fabclean_token";
+const REFRESH_KEY = "fabclean_refresh";
+const LAST_ACCESS_KEY = "fabclean_last_access";
+/** Stay signed in across visits; sign out only after 30 days without activity. */
+const IDLE_MS = 30 * 24 * 60 * 60 * 1000;
 
 interface AuthContextType {
   token: string | null;
   setToken: (token: string | null) => void;
+  /** Persist access + refresh so the next visit stays signed in. */
+  setSession: (accessToken: string, refreshToken?: string | null) => void;
   isAuthenticated: boolean;
+  /** True after bootstrap refresh attempt finishes (avoids race 401s). */
+  sessionReady: boolean;
   logout: () => void;
 }
 
@@ -37,88 +46,158 @@ function deleteCrossDomainCookie(name: string) {
   document.cookie = `${name}=; path=/${domainPart}; max-age=0; SameSite=Lax; Secure`;
 }
 
+function readIdleExpired(): boolean {
+  const raw = localStorage.getItem(LAST_ACCESS_KEY);
+  if (!raw) return false;
+  const last = Number(raw);
+  return Number.isFinite(last) && Date.now() - last > IDLE_MS;
+}
+
+function clearSessionStorage() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+  localStorage.removeItem(LAST_ACCESS_KEY);
+  deleteCrossDomainCookie(TOKEN_KEY);
+  deleteCrossDomainCookie("fabclean_user");
+}
+
+function touchLastAccess() {
+  localStorage.setItem(LAST_ACCESS_KEY, String(Date.now()));
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [, setLocation] = useLocation();
   const [token, setTokenState] = useState<string | null>(() => {
-    const local = localStorage.getItem("fabclean_token");
+    if (typeof window === "undefined") return null;
+    if (readIdleExpired()) {
+      clearSessionStorage();
+      return null;
+    }
+    const local = localStorage.getItem(TOKEN_KEY);
     if (local) return local;
-    const fromCookie = getCookie("fabclean_token");
+    const fromCookie = getCookie(TOKEN_KEY);
     if (fromCookie) {
-      localStorage.setItem("fabclean_token", fromCookie);
+      localStorage.setItem(TOKEN_KEY, fromCookie);
       return fromCookie;
     }
     return null;
   });
+  const [sessionReady, setSessionReady] = useState(false);
   const queryClient = useQueryClient();
+  const bootstrapped = useRef(false);
 
-  const setToken = (newToken: string | null) => {
-    if (newToken) {
-      localStorage.setItem("fabclean_token", newToken);
-      setCrossDomainCookie("fabclean_token", newToken, 30);
-    } else {
-      localStorage.removeItem("fabclean_token");
-      deleteCrossDomainCookie("fabclean_token");
-      deleteCrossDomainCookie("fabclean_user");
-    }
-    setTokenState(newToken);
-  };
-
-  const logout = () => {
-    setToken(null);
+  const logout = useCallback(() => {
+    clearSessionStorage();
+    setTokenState(null);
     queryClient.clear();
     setLocation("/");
-  };
+  }, [queryClient, setLocation]);
 
-  // Setup API auth token
+  const setSession = useCallback((accessToken: string, refreshToken?: string | null) => {
+    localStorage.setItem(TOKEN_KEY, accessToken);
+    if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
+    touchLastAccess();
+    setTokenState(accessToken);
+  }, []);
+
+  const setToken = useCallback(
+    (newToken: string | null) => {
+      if (newToken) {
+        setSession(newToken);
+      } else {
+        clearSessionStorage();
+        setTokenState(null);
+      }
+    },
+    [setSession],
+  );
+
   useEffect(() => {
     setAuthTokenGetter(() => token);
   }, [token]);
 
-  // 4-month (120 days) inactivity expiry
+  // Refresh access JWT on load using stored 30d refresh token (cookie may fail cross-origin).
+  useEffect(() => {
+    if (bootstrapped.current) return;
+    bootstrapped.current = true;
+
+    if (readIdleExpired()) {
+      clearSessionStorage();
+      setTokenState(null);
+      setSessionReady(true);
+      return;
+    }
+
+    const refresh = localStorage.getItem(REFRESH_KEY);
+    if (!refresh) {
+      if (localStorage.getItem(TOKEN_KEY)) touchLastAccess();
+      setSessionReady(true);
+      return;
+    }
+
+    const base = getApiBaseUrl();
+    void fetch(`${base}/api/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken: refresh }),
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          clearSessionStorage();
+          setTokenState(null);
+          return;
+        }
+        const body = await response.json().catch(() => ({}));
+        const access =
+          body?.data?.accessToken || body?.accessToken || body?.token || null;
+        const nextRefresh = body?.data?.refreshToken || body?.refreshToken || refresh;
+        if (typeof access === "string" && access) {
+          setSession(access, typeof nextRefresh === "string" ? nextRefresh : refresh);
+        }
+      })
+      .catch(() => {
+        /* keep existing access token if refresh network fails */
+        touchLastAccess();
+      })
+      .finally(() => setSessionReady(true));
+  }, [setSession]);
+
+  // 30-day inactivity clock
   useEffect(() => {
     if (!token) return;
 
-    const FOUR_MONTHS_MS = 120 * 24 * 60 * 60 * 1000;
-    
-    const checkExpiry = () => {
-      const lastAccessRaw = localStorage.getItem("fabclean_last_access");
-      const now = Date.now();
-      
-      if (lastAccessRaw) {
-        const lastAccess = parseInt(lastAccessRaw, 10);
-        if (now - lastAccess > FOUR_MONTHS_MS) {
-          logout();
-          return;
-        }
-      }
-      localStorage.setItem("fabclean_last_access", now.toString());
-    };
+    if (readIdleExpired()) {
+      logout();
+      return;
+    }
+    touchLastAccess();
 
-    // Check on mount/token change
-    checkExpiry();
-
-    // Update last access timestamp on key interactions
     let throttleTimer: number | null = null;
     const handleActivity = () => {
-      if (!throttleTimer) {
-        throttleTimer = window.setTimeout(() => {
-          localStorage.setItem("fabclean_last_access", Date.now().toString());
-          throttleTimer = null;
-        }, 10000); // Throttle to max once every 10 seconds
-      }
+      if (throttleTimer) return;
+      throttleTimer = window.setTimeout(() => {
+        if (readIdleExpired()) {
+          logout();
+        } else {
+          touchLastAccess();
+        }
+        throttleTimer = null;
+      }, 10_000);
     };
 
-    const events = ["mousedown", "keydown", "touchstart", "scroll"];
-    events.forEach(event => document.addEventListener(event, handleActivity, { passive: true }));
-    
+    const events = ["mousedown", "keydown", "touchstart", "scroll"] as const;
+    events.forEach((event) => document.addEventListener(event, handleActivity, { passive: true }));
     return () => {
       if (throttleTimer) window.clearTimeout(throttleTimer);
-      events.forEach(event => document.removeEventListener(event, handleActivity));
+      events.forEach((event) => document.removeEventListener(event, handleActivity));
     };
-  }, [token]);
+  }, [token, logout]);
 
   return (
-    <AuthContext.Provider value={{ token, setToken, isAuthenticated: !!token, logout }}>
+    <AuthContext.Provider
+      value={{ token, setToken, setSession, isAuthenticated: !!token, sessionReady, logout }}
+    >
       {children}
     </AuthContext.Provider>
   );
@@ -138,8 +217,8 @@ export function useRequireAuth() {
   const { data: profile, isLoading } = useGetProfile({
     query: {
       enabled: isAuthenticated,
-      retry: false
-    } as any
+      retry: false,
+    } as never,
   });
 
   useEffect(() => {

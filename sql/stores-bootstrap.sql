@@ -95,6 +95,17 @@ set
   is_active = excluded.is_active,
   updated_at = now();
 
+-- Hide legacy short-name / UUID-slug duplicates (Pollachi, Kinathukadavu, Udumalpet, MCET, etc.)
+update website_stores
+set
+  is_active = false,
+  updated_at = now()
+where is_active = true
+  and (
+    slug not in ('pollachi', 'suleeshwaranpatti', 'udumalpet', 'kinathukadavu')
+    or name !~* '^Fab[[:space:]]*Clean[[:space:]]*-'
+  );
+
 alter table pickups
   alter column branch type text using branch::text;
 

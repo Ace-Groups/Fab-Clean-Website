@@ -14,6 +14,8 @@ import {
   supabaseRequest,
   insertWalletTransaction,
 } from "../lib/supabase-admin.js";
+import { isR2Configured, parseDataUrl, uploadPublicObject } from "../lib/r2.js";
+import { sendMsg91EmailOtp } from "../lib/msg91-email.js";
 
 const router: IRouter = Router();
 
@@ -272,7 +274,7 @@ router.get("/users/profile", requireAuth, async (req, res) => {
         name: user?.name || customer?.name || undefined,
         email: user?.email || customer?.email || undefined,
         emailVerified,
-        avatarUrl: (customerAddr.avatar_url as string) || (customerAddr.avatarUrl as string) || undefined,
+        avatarUrl: (user as any)?.avatarUrl || (customerAddr.avatar_url as string) || (customerAddr.avatarUrl as string) || undefined,
         gstNumber: gstNumber || undefined,
         addresses: uniqueAddresses,
         createdAt: user?.createdAt?.toISOString?.() || customer?.created_at || undefined,
@@ -287,6 +289,66 @@ router.get("/users/profile", requireAuth, async (req, res) => {
   }
 });
 
+router.post("/users/avatar", requireAuth, async (req, res) => {
+  try {
+    if (!isR2Configured()) {
+      res.status(503).json({
+        success: false,
+        error: {
+          code: "NOT_CONFIGURED",
+          message: "Photo storage is not configured yet. Please try again shortly.",
+        },
+      });
+      return;
+    }
+
+    const dataUrl =
+      typeof req.body?.imageDataUrl === "string"
+        ? req.body.imageDataUrl
+        : typeof req.body?.dataUrl === "string"
+          ? req.body.dataUrl
+          : "";
+    if (!dataUrl.startsWith("data:image/")) {
+      res.status(400).json({
+        success: false,
+        error: { code: "VALIDATION_ERROR", message: "Choose a photo to upload." },
+      });
+      return;
+    }
+
+    const { buffer, contentType } = parseDataUrl(dataUrl);
+    const ext = contentType.includes("png") ? "png" : "jpg";
+    const key = `avatars/${req.authUser!.userId}/${Date.now()}.${ext}`;
+    const avatarUrl = await uploadPublicObject(key, buffer, contentType);
+
+    const [updatedUser] = await db
+      .update(usersTable)
+      .set({ avatarUrl, updatedAt: new Date() })
+      .where(eq(usersTable.id, req.authUser!.userId))
+      .returning();
+
+    res.json({
+      success: true,
+      data: {
+        avatarUrl: updatedUser?.avatarUrl || avatarUrl,
+      },
+    });
+  } catch (err) {
+    req.log.error(err, "Failed to upload avatar");
+    const message = err instanceof Error ? err.message : "Failed to upload photo";
+    const missingColumn = /avatar_url|column/i.test(message);
+    res.status(missingColumn ? 503 : 500).json({
+      success: false,
+      error: {
+        code: missingColumn ? "MIGRATION_REQUIRED" : "INTERNAL_ERROR",
+        message: missingColumn
+          ? "Photo storage column is missing. Run sql/2026-10-31-user-avatar-url.sql then retry."
+          : "Failed to upload photo",
+      },
+    });
+  }
+});
+
 router.patch("/users/profile", requireAuth, async (req, res) => {
   try {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : undefined;
@@ -297,16 +359,30 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
       ? req.body.gst_number.trim().toUpperCase()
       : undefined;
 
+    let avatarUrl =
+      typeof req.body?.avatarUrl === "string"
+        ? req.body.avatarUrl.trim()
+        : typeof req.body?.avatar_url === "string"
+          ? req.body.avatar_url.trim()
+          : undefined;
+
+    // Never persist data-URL blobs in Postgres — use /users/avatar → R2.
+    if (avatarUrl?.startsWith("data:")) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Upload photos via the avatar endpoint (Cloudflare R2).",
+        },
+      });
+      return;
+    }
+
     // GST is strictly optional: empty string or placeholder "33AAAAA0000A1Z5" becomes null
     const gstNumber = (rawGst && rawGst !== "33AAAAA0000A1Z5") ? rawGst : (rawGst !== undefined ? null : undefined);
 
     const addresses = Array.isArray(req.body?.addresses)
       ? req.body.addresses.filter((a: any) => typeof a === "string" && a.trim() !== "")
-      : undefined;
-    const avatarUrl = typeof req.body?.avatarUrl === "string"
-      ? req.body.avatarUrl.trim()
-      : typeof req.body?.avatar_url === "string"
-      ? req.body.avatar_url.trim()
       : undefined;
 
     const [existingUser, customer] = await Promise.all([
@@ -325,7 +401,9 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
         .set({
           ...(name !== undefined ? { name: name || null } : {}),
           ...(email !== undefined ? { email: email || null } : {}),
+          ...(avatarUrl !== undefined ? { avatarUrl: avatarUrl || null } : {}),
           ...(addresses !== undefined ? { addresses } : {}),
+          updatedAt: new Date(),
         })
         .where(eq(usersTable.id, req.authUser!.userId))
         .returning()
@@ -369,7 +447,7 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
         name: updatedUser?.name || updatedCustomer?.name || undefined,
         email: updatedUser?.email || updatedCustomer?.email || undefined,
         emailVerified: resolvedEmailVerified,
-        avatarUrl: (customerAddr.avatar_url as string) || (customerAddr.avatarUrl as string) || avatarUrl || undefined,
+        avatarUrl: (updatedUser as any)?.avatarUrl || (customerAddr.avatar_url as string) || (customerAddr.avatarUrl as string) || avatarUrl || undefined,
         gstNumber: resolvedGst,
         addresses: updatedUser?.addresses || (customerAddr.addresses as string[]) || [],
         createdAt: updatedUser?.createdAt?.toISOString?.() || updatedCustomer?.created_at || undefined,
@@ -409,43 +487,16 @@ router.post("/users/send-email-otp", requireAuth, async (req, res) => {
 
     req.log.info({ targetEmail, isDemo }, "Email verification OTP generated");
 
-    // 1. Dispatch Supabase Auth OTP (triggers branded verification email)
-    try {
-      const baseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
-      const serviceKey = process.env.SUPABASE_SERVICE_KEY;
-      if (baseUrl && serviceKey) {
-        await fetch(`${baseUrl}/auth/v1/otp`, {
-          method: "POST",
-          headers: {
-            apikey: serviceKey,
-            Authorization: `Bearer ${serviceKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            email: targetEmail,
-            create_user: true,
-          }),
-        }).catch(() => {});
-      }
-    } catch (_) {}
+    // Primary Email Dispatch: MSG91 Email API (preferred over Supabase)
+    const emailResult = await sendMsg91EmailOtp({
+      email: targetEmail,
+      otp: code,
+      customerName: customer?.name || req.authUser!.phone,
+    });
 
-    // 2. Dispatch MSG91 OTP route if configured
-    try {
-      const authKey = process.env.MSG91_AUTH_KEY;
-      if (authKey) {
-        await fetch("https://control.msg91.com/api/v5/otp", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            authkey: authKey,
-          },
-          body: JSON.stringify({
-            email: targetEmail,
-            otp: code,
-          }),
-        }).catch(() => {});
-      }
-    } catch (_) {}
+    if (!emailResult.success) {
+      req.log.warn({ error: emailResult.error }, "[MSG91 Email] OTP dispatch returned warning");
+    }
 
     res.json({
       success: true,

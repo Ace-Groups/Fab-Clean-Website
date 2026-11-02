@@ -18,6 +18,10 @@ import {
 } from "../lib/supabase-admin.js";
 import { sendPaidInvoiceWhatsApp } from "../lib/whatsapp-invoice.js";
 import {
+  sendMsg91PaymentSuccessEmail,
+  sendMsg91PaymentFailedEmail,
+} from "../lib/msg91-email.js";
+import {
   autoSettleCustomerDueOrders,
   recordOrderPaymentCredit,
   recordWalletPaymentDebit,
@@ -135,6 +139,18 @@ router.post("/wallet/verify-recharge", requireAuth, async (req, res) => {
     });
 
     if (!isValid) {
+      const customer = await fetchCustomerByPhone(req.authUser!.phone).catch(() => null);
+      if (customer?.email) {
+        void sendMsg91PaymentFailedEmail({
+          customerEmail: customer.email,
+          customerName: customer.name || "Customer",
+          amount: 0,
+          transactionId: razorpayPaymentId,
+          orderNumber: orderId,
+          failureReason: "Payment verification signature mismatch / declined",
+        });
+      }
+
       return res.status(400).json({
         success: false,
         error: { message: "Invalid signature. Payment verification failed." },
@@ -294,6 +310,18 @@ router.post("/orders/:id/verify-pay", requireAuth, async (req, res) => {
     });
 
     if (!isValid) {
+      const customer = await fetchCustomerByPhone(req.authUser!.phone).catch(() => null);
+      if (customer?.email) {
+        void sendMsg91PaymentFailedEmail({
+          customerEmail: customer.email,
+          customerName: customer.name || "Customer",
+          amount: 0,
+          transactionId: razorpayPaymentId,
+          orderNumber: orderId,
+          failureReason: "Payment verification signature mismatch / declined",
+        });
+      }
+
       return res.status(400).json({
         success: false,
         error: { message: "Invalid signature. Payment verification failed." },
@@ -360,6 +388,20 @@ router.post("/orders/:id/verify-pay", requireAuth, async (req, res) => {
         amount: amountPaid,
         invoiceUrl: order.invoice_url,
         itemsSummary: itemsList,
+      });
+    }
+
+    // 4. Dispatch Payment Received E-Receipt via MSG91 Email
+    const customerEmail = customer?.email || (order as any).customer_email;
+    if (customerEmail) {
+      void sendMsg91PaymentSuccessEmail({
+        customerEmail,
+        customerName: order.customer_name || customer?.name || "Customer",
+        amount: amountPaid,
+        transactionId: razorpayPaymentId,
+        orderNumber: order.order_number,
+        paymentMethod: "Razorpay (Online)",
+        receiptPdfUrl: order.invoice_url || undefined,
       });
     }
 
@@ -452,6 +494,20 @@ router.post("/orders/:id/pay-with-wallet", requireAuth, async (req, res) => {
         amount: amountToPay,
         invoiceUrl: order.invoice_url,
         itemsSummary: itemsList,
+      });
+    }
+
+    // 5. Dispatch Payment Received E-Receipt via MSG91 Email for wallet payment
+    const customerEmail = customer?.email || (order as any).customer_email;
+    if (customerEmail) {
+      void sendMsg91PaymentSuccessEmail({
+        customerEmail,
+        customerName: order.customer_name || customer?.name || "Customer",
+        amount: amountToPay,
+        transactionId: `WAL-DEB-${Date.now()}`,
+        orderNumber: order.order_number,
+        paymentMethod: "Fab Clean Wallet",
+        receiptPdfUrl: order.invoice_url || undefined,
       });
     }
 

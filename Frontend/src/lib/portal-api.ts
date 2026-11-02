@@ -125,3 +125,38 @@ export async function payOrderWithWallet(token: string, orderId: string) {
     method: "POST",
   });
 }
+
+export type PortalProfile = {
+  id: string;
+  phone: string;
+  name?: string;
+  email?: string;
+  avatarUrl?: string;
+  addresses?: string[];
+  createdAt?: string;
+};
+
+export type PortalProfilePatch = {
+  name?: string;
+  email?: string;
+  avatarUrl?: string;
+  addresses?: string[];
+};
+
+export async function fetchPortalProfile(token: string) {
+  return request<{ success: boolean; data: PortalProfile }>("/api/users/profile", token);
+}
+
+export async function patchPortalProfile(token: string, data: PortalProfilePatch) {
+  return request<{ success: boolean; data: PortalProfile }>("/api/users/profile", token, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function uploadPortalAvatar(token: string, imageDataUrl: string) {
+  return request<{ success: boolean; data: { avatarUrl: string } }>("/api/users/avatar", token, {
+    method: "POST",
+    body: JSON.stringify({ imageDataUrl }),
+  });
+}
