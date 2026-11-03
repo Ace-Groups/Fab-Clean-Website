@@ -21,7 +21,7 @@ pnpm --filter @workspace/api-server build  # Backend → Backend/dist/index.cjs
 
 Production API URL is set in `Frontend/.env.production`:
 
-`VITE_API_URL=https://fab-clean-website-api-254040893134.us-central1.run.app`
+`VITE_API_URL=https://fab-clean-api-254040893134.us-central1.run.app`
 
 Login uses MSG91 **custom UI** (`exposeMethods: true` + in-page OTP field). A hosting-only redeploy is enough for OTP UI fixes — no Cloud Run change required unless auth API env changed.
 
@@ -56,7 +56,7 @@ Or manually:
 ```bash
 gcloud builds submit . --project fab-clean-env-1234 \
   --tag gcr.io/fab-clean-env-1234/fab-clean-api:$(git rev-parse --short HEAD)
-gcloud run deploy fab-clean-website-api \
+gcloud run deploy fab-clean-api \
   --project fab-clean-env-1234 \
   --image gcr.io/fab-clean-env-1234/fab-clean-api:$(git rev-parse --short HEAD) \
   --region us-central1 \
@@ -64,10 +64,6 @@ gcloud run deploy fab-clean-website-api \
   --allow-unauthenticated \
   --port 8080
 ```
-
-> Note: the website API runs on Cloud Run service `fab-clean-website-api`. The
-> `fab-clean-api` service is reserved for the ERP (FabZClean-T1) — see that repo's
-> README. Do not deploy the website backend image to `fab-clean-api`.
 
 Set secrets on the service (Console or `gcloud run services update … --update-secrets` / `--set-env-vars`). Required keys are listed in `Backend/.env.example`. **Never** put `MSG91_AUTH_KEY` in Frontend env.
 
