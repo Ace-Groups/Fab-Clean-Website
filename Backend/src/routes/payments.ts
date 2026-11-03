@@ -83,6 +83,11 @@ router.get("/pay/:identifier", async (req, res) => {
       `);
     }
 
+    const paymentLink = (order as any).payment_link || (order as any).paymentLink;
+    if (paymentLink && typeof paymentLink === "string" && paymentLink.startsWith("http")) {
+      return res.redirect(302, paymentLink);
+    }
+
     return res.redirect(302, `https://myfabclean.com/trackorder/${encodeURIComponent(order.order_number)}`);
   } catch (err: any) {
     req.log?.error(err, "Pay redirect failed");

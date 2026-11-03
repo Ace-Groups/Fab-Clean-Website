@@ -40,6 +40,12 @@ const DEFAULT_DOMAIN = process.env.MSG91_EMAIL_DOMAIN || "mail.myfabclean.com";
 const ACE_DIGITAL_URL = "https://www.acedigital.cc";
 
 /**
+ * Global dispatch hold: pause sending automatic outbound emails until user confirmation.
+ * Set MSG91_EMAIL_DISPATCH_ENABLED=true or EMAIL_SENDING_ENABLED=true when approved.
+ */
+export const IS_EMAIL_DISPATCH_ENABLED = process.env.MSG91_EMAIL_DISPATCH_ENABLED === 'true' || process.env.EMAIL_SENDING_ENABLED === 'true';
+
+/**
  * Base helper to send an email via MSG91 Email API (v5)
  */
 export async function sendMsg91Email(options: Msg91SendEmailOptions): Promise<Msg91EmailResult> {
@@ -48,6 +54,14 @@ export async function sendMsg91Email(options: Msg91SendEmailOptions): Promise<Ms
 
   if (validRecipients.length === 0) {
     return { success: false, error: "No valid recipient email address provided" };
+  }
+
+  if (!IS_EMAIL_DISPATCH_ENABLED) {
+    console.log(`⏸️ [MSG91 Email] Dispatch is currently on HOLD pending user confirmation. Email to ${validRecipients.map((r) => r.email).join(', ')} was held.`);
+    return {
+      success: true,
+      messageId: 'HELD_PENDING_CONFIRMATION',
+    };
   }
 
   const authKey = process.env.MSG91_AUTH_KEY || DEFAULT_AUTH_KEY;
@@ -82,7 +96,10 @@ export async function sendMsg91Email(options: Msg91SendEmailOptions): Promise<Ms
       to: validRecipients.map((r) => ({ name: r.name || "Customer", email: r.email })),
       from,
       subject: options.subject,
-      body: options.html,
+      body: {
+        type: "text/html",
+        data: options.html,
+      },
       domain: options.domain || DEFAULT_DOMAIN,
       ...(options.attachments ? { attachments: options.attachments } : {}),
     };
