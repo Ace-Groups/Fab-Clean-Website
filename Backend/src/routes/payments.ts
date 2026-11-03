@@ -9,6 +9,7 @@ import {
 import {
   fetchCustomerByPhone,
   fetchOwnedOrderById,
+  fetchOrderByIdentifier,
   updateCustomerById,
   updateOrder,
   insertTransaction,
@@ -549,17 +550,25 @@ router.post("/payments/webhook", async (req, res) => {
       return res.status(400).json({ status: "error", message: "Invalid webhook signature" });
     }
 
-    const event = req.body.event;
-    const payload = req.body.payload;
+    const event = req.body?.event;
+    const payload = req.body?.payload;
 
-    if (event === "payment.captured") {
+    if (event === "payment.captured" || event === "payment_link.paid" || event === "order.paid") {
       const payment = payload?.payment?.entity;
-      const notes = payment?.notes || {};
-      const amountInRupees = Number(payment?.amount || 0) / 100;
-      const paymentId = payment?.id;
+      const paymentLink = payload?.payment_link?.entity;
+      const orderEntity = payload?.order?.entity;
 
+      const notes = {
+        ...(paymentLink?.notes || {}),
+        ...(payment?.notes || {}),
+        ...(orderEntity?.notes || {}),
+      };
+
+      const amountInRupees = Number(payment?.amount || paymentLink?.amount_paid || paymentLink?.amount || 0) / 100;
+      const paymentId = payment?.id || paymentLink?.id || "RAZORPAY_WEBHOOK";
+
+      // Case A: Wallet Recharge
       if (notes.type === "WALLET_RECHARGE" && notes.customerId) {
-        // Asynchronous credit fallback for wallet
         req.log.info({ customerId: notes.customerId, amount: amountInRupees, paymentId }, "Webhook: Processing wallet recharge");
         const customer = await fetchCustomerByPhone(notes.phone);
         if (customer) {
@@ -586,6 +595,93 @@ router.post("/payments/webhook", async (req, res) => {
             status: "SUCCESS",
             notes: `Webhook payment: ${paymentId}`,
           }).catch(() => {});
+        }
+      }
+
+      // Case B: Order Payment (Paid via Razorpay Link or QR Code)
+      const targetOrderId = notes.orderId || notes.order_id;
+      const targetOrderNumber = notes.orderNumber || notes.order_number;
+
+      if (notes.type === "ORDER_PAYMENT" || targetOrderId || targetOrderNumber) {
+        const identifier = targetOrderId || targetOrderNumber;
+        req.log.info({ identifier, amount: amountInRupees, paymentId }, "Webhook: Processing Order Payment");
+
+        let order = identifier ? await fetchOrderByIdentifier(identifier).catch(() => null) : null;
+        if (!order && paymentLink?.description) {
+          const match = paymentLink.description.match(/Order\s*#?([A-Za-z0-9-]+)/i);
+          if (match && match[1]) {
+            order = await fetchOrderByIdentifier(match[1]).catch(() => null);
+          }
+        }
+
+        if (order) {
+          const totalAmount = Number(order.total_amount ?? amountInRupees);
+          const customerPhone = order.customer_phone || notes.phone || "";
+
+          // 1. Update Order in Supabase Postgres to PAID
+          await updateOrder(order.id, {
+            payment_status: "paid",
+            payment_method: "online_razorpay",
+            advance_paid: totalAmount,
+            credit_used: 0,
+            is_credit_order: false,
+            updated_at: new Date().toISOString(),
+          });
+
+          req.log.info({ orderNumber: order.order_number }, "✅ Webhook: Order marked as PAID in Supabase");
+
+          // 2. Settle customer wallet & credit ledger
+          if (order.customer_id && amountInRupees > 0) {
+            await recordOrderPaymentCredit({
+              customerId: order.customer_id,
+              orderId: order.id,
+              orderNumber: order.order_number,
+              amountPaid: amountInRupees,
+              paymentMethod: "UPI",
+              referenceId: paymentId,
+            }).catch((walErr) => req.log.warn(walErr, "Failed to record credit in wallet ledger"));
+
+            await insertTransaction({
+              customer_id: order.customer_id,
+              order_id: order.id,
+              type: "ORDER_PAYMENT",
+              amount: amountInRupees,
+              payment_method: "ONLINE_RAZORPAY",
+              status: "SUCCESS",
+              notes: `Razorpay Webhook: ${paymentId}`,
+            }).catch(() => {});
+          }
+
+          // 3. Dispatch WhatsApp Paid Invoice
+          if (customerPhone && order.invoice_url) {
+            const itemsList = Array.isArray(order.items)
+              ? order.items.map((it: any) => it.serviceName || it.name || "Item").join(", ")
+              : "Dry Cleaning & Laundry";
+
+            void sendPaidInvoiceWhatsApp({
+              phoneNumber: customerPhone,
+              customerName: order.customer_name || "Customer",
+              orderNumber: order.order_number,
+              amount: amountInRupees || totalAmount,
+              invoiceUrl: order.invoice_url,
+              itemsSummary: itemsList,
+            });
+          }
+
+          // 4. Dispatch Payment Received E-Receipt via MSG91 Email
+          const customer = customerPhone ? await fetchCustomerByPhone(customerPhone).catch(() => null) : null;
+          const targetEmail = customer?.email || (order as any).customer_email;
+          if (targetEmail) {
+            void sendMsg91PaymentSuccessEmail({
+              customerEmail: targetEmail,
+              customerName: order.customer_name || customer?.name || "Customer",
+              amount: amountInRupees || totalAmount,
+              transactionId: paymentId,
+              orderNumber: order.order_number,
+              paymentMethod: "Razorpay (Online UPI/Card)",
+              receiptPdfUrl: order.invoice_url || undefined,
+            });
+          }
         }
       }
     }

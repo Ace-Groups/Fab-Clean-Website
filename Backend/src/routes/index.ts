@@ -13,6 +13,8 @@ import feedbackRouter from "./feedback.js";
 import portalRouter from "./portal.js";
 import paymentsRouter from "./payments.js";
 import settingsRouter from "./settings.js";
+import expensesRouter from "./expenses.js";
+import promotionsRouter from "./promotions.js";
 
 const router: IRouter = Router();
 
@@ -30,5 +32,7 @@ router.use(feedbackRouter);
 router.use(portalRouter);
 router.use(paymentsRouter);
 router.use(settingsRouter);
+router.use(expensesRouter);
+router.use(promotionsRouter);
 
 export default router;

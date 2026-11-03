@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { Router, type IRouter } from "express";
 import jwt from "jsonwebtoken";
 import { db, pool } from "@workspace/db";
@@ -13,10 +14,15 @@ import { JWT_SECRET } from "../lib/auth.js";
 
 const router: IRouter = Router();
 
+const CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
 function generateBookingRef(): string {
-  const year = new Date().getFullYear();
-  const rand = Math.floor(1000 + Math.random() * 9000);
-  return `FC-PU-${year}-${rand}`;
+  const bytes = crypto.randomBytes(5);
+  let code = "";
+  for (let i = 0; i < 5; i++) {
+    code += CROCKFORD_BASE32[bytes[i] % CROCKFORD_BASE32.length];
+  }
+  return "B-" + code;
 }
 
 const ERP_PUBLIC_BOOKING_URL = process.env.ERP_PUBLIC_BOOKING_URL || "";

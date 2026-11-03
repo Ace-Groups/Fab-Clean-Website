@@ -14,6 +14,55 @@ import { recordOrderCreditDebit, recordWalletPaymentDebit } from "../lib/wallet-
 import { isR2Configured, uploadPublicObject } from "../lib/r2.js";
 import { sendMsg91OrderInvoiceEmail, sendMsg91OrderStatusEmail } from "../lib/msg91-email.js";
 
+
+// Strict 5-Character Base32 Crockford Alphabet (no I, L, O, U to prevent visual confusion and offensive words)
+const CROCKFORD_BASE32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+function generateCrockford5(): string {
+  const bytes = crypto.randomBytes(5);
+  let result = '';
+  for (let i = 0; i < 5; i++) {
+    result += CROCKFORD_BASE32[bytes[i] % CROCKFORD_BASE32.length];
+  }
+  return result;
+}
+
+/**
+ * Generate a strict collision-resistant 5-char code for:
+ * - Direct Orders: #O-XXXXX
+ * - Website Bookings: B-XXXXX
+ * - Converted Bookings: BO-XXXXX
+ */
+async function generateUniqueOrderNumber(prefix: 'O' | 'BO' = 'O'): Promise<string> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const code = generateCrockford5();
+    const orderNumber = prefix + '-' + code;
+    const existing = await supabaseRequest<any[]>(
+      '/rest/v1/orders?select=id&order_number=eq.' + encodeURIComponent(orderNumber) + '&limit=1',
+      'GET'
+    ).catch(() => []);
+    if (!existing || existing.length === 0) {
+      return orderNumber;
+    }
+  }
+  return prefix + '-' + generateCrockford5();
+}
+
+async function generateUniqueBookingRef(): Promise<string> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const code = generateCrockford5();
+    const bookingRef = 'B-' + code;
+    const existing = await supabaseRequest<any[]>(
+      '/rest/v1/pickups?select=id&booking_reference=eq.' + encodeURIComponent(bookingRef) + '&limit=1',
+      'GET'
+    ).catch(() => []);
+    if (!existing || existing.length === 0) {
+      return bookingRef;
+    }
+  }
+  return 'B-' + generateCrockford5();
+}
+
 const router: IRouter = Router();
 
 function mapCustomer(c: any) {
@@ -106,6 +155,38 @@ function mapOrderForErp(o: any) {
     is_credit_order: Boolean(o.is_credit_order),
     creditUsed: Number(o.credit_used || 0),
     credit_used: Number(o.credit_used || 0),
+    couponCode: o.coupon_code || null,
+    coupon_code: o.coupon_code || null,
+    discountType: o.discount_type || null,
+    discount_type: o.discount_type || null,
+    discountValue: o.discount_value !== null && o.discount_value !== undefined ? Number(o.discount_value) : null,
+    discount_value: o.discount_value !== null && o.discount_value !== undefined ? Number(o.discount_value) : null,
+    extraCharges: o.extra_charges !== null && o.extra_charges !== undefined ? Number(o.extra_charges) : null,
+    extra_charges: o.extra_charges !== null && o.extra_charges !== undefined ? Number(o.extra_charges) : null,
+    extraChargesLabel: o.extra_charges_label || null,
+    extra_charges_label: o.extra_charges_label || null,
+    gstEnabled: Boolean(o.gst_enabled),
+    gst_enabled: Boolean(o.gst_enabled),
+    gstRate: o.gst_rate !== null && o.gst_rate !== undefined ? Number(o.gst_rate) : 0,
+    gst_rate: o.gst_rate !== null && o.gst_rate !== undefined ? Number(o.gst_rate) : 0,
+    gstAmount: o.gst_amount !== null && o.gst_amount !== undefined ? Number(o.gst_amount) : 0,
+    gst_amount: o.gst_amount !== null && o.gst_amount !== undefined ? Number(o.gst_amount) : 0,
+    gstNumber: o.gst_number || null,
+    gst_number: o.gst_number || null,
+    panNumber: o.pan_number || null,
+    pan_number: o.pan_number || null,
+    fulfillmentType: o.fulfillment_type || "pickup",
+    fulfillment_type: o.fulfillment_type || "pickup",
+    specialInstructions: o.special_instructions || o.notes || "",
+    special_instructions: o.special_instructions || o.notes || "",
+    orderType: o.order_type || (o.priority === "urgent" ? "instant" : o.priority === "high" ? "express" : "standard"),
+    order_type: o.order_type || (o.priority === "urgent" ? "instant" : o.priority === "high" ? "express" : "standard"),
+    storeCode: o.store_code || "POL",
+    store_code: o.store_code || "POL",
+    deliveryAddress: o.delivery_address || (typeof o.shipping_address === "string" ? o.shipping_address : o.shipping_address?.street || ""),
+    delivery_address: o.delivery_address || (typeof o.shipping_address === "string" ? o.shipping_address : o.shipping_address?.street || ""),
+    deliveryCharges: o.delivery_charges !== null && o.delivery_charges !== undefined ? Number(o.delivery_charges) : 0,
+    delivery_charges: o.delivery_charges !== null && o.delivery_charges !== undefined ? Number(o.delivery_charges) : 0,
     status: o.status || "pending",
     pickupDate: o.pickup_date,
     pickup_date: o.pickup_date,
@@ -587,6 +668,49 @@ router.put("/orders/:id", async (req, res) => {
     if (body.customer_email !== undefined) snake.customer_email = body.customer_email;
     if (body.invoiceUrl !== undefined) snake.invoice_url = body.invoiceUrl;
     if (body.invoice_url !== undefined) snake.invoice_url = body.invoice_url;
+    if (body.discountType !== undefined) snake.discount_type = body.discountType;
+    if (body.discount_type !== undefined) snake.discount_type = body.discount_type;
+    if (body.discountValue !== undefined) snake.discount_value = body.discountValue;
+    if (body.discount_value !== undefined) snake.discount_value = body.discount_value;
+    if (body.couponCode !== undefined) snake.coupon_code = body.couponCode;
+    if (body.coupon_code !== undefined) snake.coupon_code = body.coupon_code;
+    if (body.extraCharges !== undefined) snake.extra_charges = body.extraCharges;
+    if (body.extra_charges !== undefined) snake.extra_charges = body.extra_charges;
+    if (body.extraChargesLabel !== undefined) snake.extra_charges_label = body.extraChargesLabel;
+    if (body.paymentMethod !== undefined) snake.payment_method = body.paymentMethod;
+    if (body.payment_method !== undefined) snake.payment_method = body.payment_method;
+    if (body.gstEnabled !== undefined) snake.gst_enabled = Boolean(body.gstEnabled);
+    if (body.gst_enabled !== undefined) snake.gst_enabled = Boolean(body.gst_enabled);
+    if (body.gstRate !== undefined) snake.gst_rate = Number(body.gstRate);
+    if (body.gst_rate !== undefined) snake.gst_rate = Number(body.gst_rate);
+    if (body.gstAmount !== undefined) snake.gst_amount = Number(body.gstAmount);
+    if (body.gst_amount !== undefined) snake.gst_amount = Number(body.gst_amount);
+    if (body.gstNumber !== undefined) snake.gst_number = body.gstNumber;
+    if (body.gst_number !== undefined) snake.gst_number = body.gst_number;
+    if (body.panNumber !== undefined) snake.pan_number = body.panNumber;
+    if (body.pan_number !== undefined) snake.pan_number = body.pan_number;
+    if (body.orderType !== undefined) snake.order_type = body.orderType;
+    if (body.order_type !== undefined) snake.order_type = body.order_type;
+    if (body.deliveryCharges !== undefined) snake.delivery_charges = body.deliveryCharges;
+    if (body.delivery_charges !== undefined) snake.delivery_charges = body.delivery_charges;
+
+    // Recalculate financial balances if totalAmount or advancePaid was updated
+    if (snake.total_amount !== undefined || snake.advance_paid !== undefined) {
+      const tot = Number(snake.total_amount !== undefined ? snake.total_amount : (body.totalAmount || body.total_amount || 0));
+      const adv = Number(snake.advance_paid !== undefined ? snake.advance_paid : (body.advancePaid || body.advance_paid || 0));
+      const rem = Math.max(0, tot - adv);
+      snake.credit_used = rem;
+      snake.is_credit_order = rem > 0;
+      if (body.paymentStatus === undefined && body.payment_status === undefined) {
+        if (adv >= tot && tot > 0) {
+          snake.payment_status = "paid";
+        } else if (adv > 0) {
+          snake.payment_status = "partial";
+        } else {
+          snake.payment_status = "unpaid";
+        }
+      }
+    }
 
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId);
     const filter = isUuid ? `id=eq.${encodeURIComponent(orderId)}` : `order_number=eq.${encodeURIComponent(orderId)}`;
@@ -668,9 +792,8 @@ router.post("/orders", async (req, res) => {
     }
 
     const orderId = crypto.randomUUID();
-    const year = new Date().getFullYear();
-    const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const orderNumber = `FZC-${year}FAB${randomSuffix}`;
+    const isFromBooking = Boolean(body.bookingId || body.booking_id || body.bookingRequestId || body.bookingSource === "website");
+    const orderNumber = await generateUniqueOrderNumber(isFromBooking ? "BO" : "O");
 
     const orderRecord = {
       id: orderId,
@@ -873,9 +996,7 @@ router.post("/v1/bookings/:id/convert-to-order", async (req, res) => {
       return res.status(404).json({ success: false, message: "Booking not found" });
     }
 
-    const year = new Date().getFullYear();
-    const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const orderNumber = `FZC-${year}FAB${randomSuffix}`;
+    const orderNumber = await generateUniqueOrderNumber("BO");
     const orderId = crypto.randomUUID();
 
     const orderRecord = {
@@ -1118,7 +1239,8 @@ const handleWhatsAppSendBill = async (req: any, res: any) => {
     });
 
     const msg91Res: any = await response.json().catch(() => ({}));
-    const newSendCount = Number(sendCount) + 1;
+    const isSuccess = response.ok && msg91Res?.status !== 'error';
+    const newSendCount = isSuccess ? (Number(sendCount) + 1) : Number(sendCount);
 
     // Dispatches invoice email from dobi@mail.myfabclean.com if customer has an email
     try {
@@ -1164,11 +1286,13 @@ const handleWhatsAppSendBill = async (req: any, res: any) => {
     if (cleanOrderNum) {
       try {
         const patchData: Record<string, any> = {
-          last_whatsapp_sent_at: new Date().toISOString(),
-          last_whatsapp_status: response.ok ? 'Sent' : (msg91Res?.message || 'Failed'),
+          last_whatsapp_status: isSuccess ? 'Sent' : (msg91Res?.message || 'Failed'),
           whatsapp_message_count: newSendCount,
           updated_at: new Date().toISOString(),
         };
+        if (isSuccess) {
+          patchData.last_whatsapp_sent_at = new Date().toISOString();
+        }
         if (pdfUrl) patchData.invoice_url = pdfUrl;
         
         let patchRows = await supabaseRequest<any[]>(
@@ -1200,7 +1324,7 @@ const handleWhatsAppSendBill = async (req: any, res: any) => {
       }
     }
 
-    if (!response.ok) {
+    if (!isSuccess) {
       req.log?.warn({ msg91Res }, 'MSG91 WhatsApp send returned non-200');
       return res.status(200).json({
         success: false,
