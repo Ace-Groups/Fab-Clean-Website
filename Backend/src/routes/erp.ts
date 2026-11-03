@@ -119,9 +119,20 @@ function mapOrderForErp(o: any) {
       parsedItems = [];
     }
   }
+  const itemsList = Array.isArray(parsedItems) ? parsedItems : [];
+  const itemNames = itemsList
+    .map((it: any) => it?.customName || it?.serviceName || it?.name || it?.service)
+    .filter((n: any) => Boolean(n && String(n).trim().toLowerCase() !== "unknown service"));
+  const uniqueNames = Array.from(new Set(itemNames));
+  const serviceSummary = uniqueNames.length === 1
+    ? uniqueNames[0]
+    : uniqueNames.length > 1
+      ? `${uniqueNames[0]} +${itemsList.length - 1} more`
+      : (o.service && String(o.service).trim().toLowerCase() !== "unknown service" ? o.service : "Garment Care");
 
   return {
     ...o,
+    service: serviceSummary,
     id: o.id,
     orderNumber: o.order_number,
     order_number: o.order_number,
