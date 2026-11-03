@@ -976,7 +976,9 @@ router.patch("/v1/bookings/:id", async (req, res) => {
     if (body.status) patchPayload.status = body.status;
     if (body.storeCode) { patchPayload.branch = normalizeStoreCode(body.storeCode); patchPayload.store_code = normalizeStoreCode(body.storeCode); }
 
-    await supabaseRequest(`/rest/v1/pickups?id=eq.${encodeURIComponent(id)}`, "PATCH", patchPayload, {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    const filter = isUuid ? `id=eq.${encodeURIComponent(id)}` : `booking_reference=eq.${encodeURIComponent(id)}`;
+    await supabaseRequest(`/rest/v1/pickups?${filter}`, "PATCH", patchPayload, {
       Prefer: "return=minimal",
     });
 
@@ -990,7 +992,9 @@ router.patch("/v1/bookings/:id", async (req, res) => {
 router.post("/v1/bookings/:id/convert-to-order", async (req, res) => {
   try {
     const id = req.params.id;
-    const pickups = await supabaseRequest<any[]>(`/rest/v1/pickups?id=eq.${encodeURIComponent(id)}`, "GET");
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    const filter = isUuid ? `id=eq.${encodeURIComponent(id)}` : `booking_reference=eq.${encodeURIComponent(id)}`;
+    const pickups = await supabaseRequest<any[]>(`/rest/v1/pickups?${filter}`, "GET");
     const pickup = pickups[0];
     if (!pickup) {
       return res.status(404).json({ success: false, message: "Booking not found" });
@@ -1024,7 +1028,7 @@ router.post("/v1/bookings/:id/convert-to-order", async (req, res) => {
     });
 
     await supabaseRequest(
-      `/rest/v1/pickups?id=eq.${encodeURIComponent(id)}`,
+      `/rest/v1/pickups?${filter}`,
       "PATCH",
       {
         status: "confirmed",
@@ -1623,7 +1627,7 @@ router.post(['/erp/app-management/banners', '/api/erp/app-management/banners'], 
 });
 
 // Website Public Enquiries from contacts table
-router.get(['/erp/website-management/enquiries', '/api/erp/website-management/enquiries'], async (req, res) => {
+router.get(["/erp/website-management/enquiries", "/api/erp/website-management/enquiries", "/erp/website/enquiries", "/api/erp/website/enquiries"], async (req, res) => {
   try {
     const rows = await supabaseRequest<any[]>('/rest/v1/contacts?select=*&order=created_at.desc&limit=100', 'GET').catch(() => []);
     res.json({ success: true, count: rows.length, data: rows });
