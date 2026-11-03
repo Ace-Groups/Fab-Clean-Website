@@ -43,6 +43,54 @@ router.get("/config", (req, res) => {
 });
 
 /**
+ * GET /api/payments/pay/:identifier (or /pay/:identifier)
+ * Public redirect for customer payment
+ */
+router.get("/pay/:identifier", async (req, res) => {
+  try {
+    const identifier = req.params.identifier;
+    const order = await fetchOrderByIdentifier(identifier);
+    if (!order) {
+      return res.status(404).send(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>Fab Clean - Order Not Found</title><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; text-align: center; padding: 40px 20px; background: #f9fafb;">
+          <h2 style="color: #ef4444;">Order Not Found</h2>
+          <p style="color: #4b5563;">We could not locate this order. Please contact Fab Clean support.</p>
+        </body>
+        </html>
+      `);
+    }
+
+    if (order.payment_status === "paid") {
+      return res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>Fab Clean - Bill Already Paid</title><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; text-align: center; padding: 50px 20px; background: #f0fdf4;">
+          <div style="max-width: 420px; margin: 0 auto; background: white; padding: 32px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #bbf7d0;">
+            <div style="font-size: 48px; margin-bottom: 12px;">✅</div>
+            <h2 style="color: #15803d; margin: 0 0 8px 0;">Payment Received!</h2>
+            <p style="color: #4b5563; font-size: 15px; margin: 0 0 16px 0;">Order <strong>#${order.order_number}</strong> has already been marked as PAID.</p>
+            <div style="background: #f8fafc; border-radius: 8px; padding: 12px; font-size: 14px; color: #334155; margin-bottom: 20px;">
+              Total Amount: <strong>₹${order.total_amount}</strong>
+            </div>
+            <a href="https://myfabclean.com" style="display: inline-block; background: #16a34a; color: white; padding: 10px 24px; border-radius: 8px; text-decoration: none; font-weight: 600;">Visit Fab Clean</a>
+          </div>
+        </body>
+        </html>
+      `);
+    }
+
+    return res.redirect(302, `https://myfabclean.com/trackorder/${encodeURIComponent(order.order_number)}`);
+  } catch (err: any) {
+    req.log?.error(err, "Pay redirect failed");
+    res.status(500).send("Unable to process payment link");
+  }
+});
+
+/**
  * GET /api/wallet/transactions
  * Returns wallet transaction history for the logged-in customer
  */

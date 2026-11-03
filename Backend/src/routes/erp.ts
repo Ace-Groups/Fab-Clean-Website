@@ -1612,13 +1612,22 @@ router.post(['/erp/app-management/banners', '/api/erp/app-management/banners'], 
     const { banner } = req.body || {};
     if (!banner?.id) return res.status(400).json({ success: false, error: 'Banner ID is required' });
 
-    await supabaseRequest('/rest/v1/settings', 'POST', {
-      key: `banner_${banner.id}`,
+    const key = `banner_${banner.id}`;
+    const payload = {
+      key,
       value: JSON.stringify(banner),
       category: 'app_banner',
       updated_at: new Date().toISOString(),
       updated_by: 'erp_admin',
-    }, { Prefer: 'resolution=merge-duplicates' });
+    };
+
+    // Check if the setting already exists to avoid unique constraint conflict
+    const existing = await supabaseRequest<any[]>(`/rest/v1/settings?key=eq.${encodeURIComponent(key)}&limit=1`, 'GET').catch(() => []);
+    if (existing && existing.length > 0) {
+      await supabaseRequest(`/rest/v1/settings?key=eq.${encodeURIComponent(key)}`, 'PATCH', payload);
+    } else {
+      await supabaseRequest('/rest/v1/settings', 'POST', payload);
+    }
 
     res.json({ success: true, message: 'Banner updated successfully', banner });
   } catch (err: any) {

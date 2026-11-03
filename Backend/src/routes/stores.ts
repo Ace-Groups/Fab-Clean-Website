@@ -22,7 +22,7 @@ function isCustomerFacingStore(store: { slug?: string | null; name?: string | nu
   return /^fab\s*clean\s*-/i.test(name);
 }
 
-router.get("/stores", async (req, res) => {
+router.get(["/stores", "/erp/website/stores", "/api/erp/website/stores"], async (req, res) => {
   try {
     const [stores, appStores] = await Promise.all([
       db
@@ -37,9 +37,9 @@ router.get("/stores", async (req, res) => {
         longitude: storesTable.longitude,
         coverageRadiusKm: storesTable.coverageRadiusKm,
         mapHref: storesTable.mapHref,
+        isActive: storesTable.isActive,
       })
       .from(storesTable)
-      .where(eq(storesTable.isActive, true))
       .orderBy(asc(storesTable.sortOrder), asc(storesTable.name)),
       fetchAppStores(),
     ]);
@@ -62,11 +62,13 @@ router.get("/stores", async (req, res) => {
         longitude: Number(appStore.longitude ?? 0),
         coverageRadiusKm: 10,
         mapHref: appStore.map_href || "",
+        isActive: appStore.is_active ?? true,
       });
     }
 
+    const isErpRequest = req.path.includes("erp");
     const data = Array.from(mergedBySlug.values())
-      .filter(isCustomerFacingStore)
+      .filter((s) => isErpRequest || isCustomerFacingStore(s))
       .sort((a, b) => {
         const aOrder = CANONICAL_STORE_SLUG_ORDER.indexOf(
           String(a.slug).toLowerCase() as (typeof CANONICAL_STORE_SLUG_ORDER)[number],
@@ -74,19 +76,88 @@ router.get("/stores", async (req, res) => {
         const bOrder = CANONICAL_STORE_SLUG_ORDER.indexOf(
           String(b.slug).toLowerCase() as (typeof CANONICAL_STORE_SLUG_ORDER)[number],
         );
-        return aOrder - bOrder;
+        if (aOrder !== -1 && bOrder !== -1) return aOrder - bOrder;
+        if (aOrder !== -1) return -1;
+        if (bOrder !== -1) return 1;
+        return String(a.name).localeCompare(String(b.name));
       });
 
     res.json({
       success: true,
       data,
     });
-  } catch (err) {
+  } catch (err: any) {
     req.log.error(err, "Failed to load stores");
     res.status(500).json({
       success: false,
       error: { code: "INTERNAL_ERROR", message: "Failed to load stores" },
     });
+  }
+});
+
+// Create Store
+router.post(["/stores", "/erp/website/stores", "/api/erp/website/stores"], async (req, res) => {
+  try {
+    const { name, slug, address, phone, email, latitude, longitude, coverageRadiusKm, mapHref, isActive } = req.body || {};
+    if (!name || !address) {
+      return res.status(400).json({ success: false, error: "Store name and address are required" });
+    }
+
+    const cleanSlug = (slug || name.toLowerCase().replace(/[^a-z0-9]+/g, "-")).trim();
+
+    const [inserted] = await db
+      .insert(storesTable)
+      .values({
+        name,
+        slug: cleanSlug,
+        address,
+        phone: phone || "93630 59595",
+        email: email || null,
+        latitude: Number(latitude ?? 10.6677),
+        longitude: Number(longitude ?? 77.012),
+        coverageRadiusKm: Number(coverageRadiusKm ?? 10),
+        mapHref: mapHref || null,
+        isActive: isActive !== false,
+      })
+      .returning();
+
+    res.json({ success: true, message: "Store created successfully", data: inserted });
+  } catch (err: any) {
+    req.log.error(err, "Failed to create store");
+    res.status(500).json({ success: false, error: err.message || "Failed to create store" });
+  }
+});
+
+// Update Store
+router.put(["/stores/:id", "/erp/website/stores/:id", "/api/erp/website/stores/:id"], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, slug, address, phone, email, latitude, longitude, coverageRadiusKm, mapHref, isActive } = req.body || {};
+
+    const updateData: Record<string, any> = {};
+    if (name !== undefined) updateData.name = name;
+    if (slug !== undefined) updateData.slug = slug;
+    if (address !== undefined) updateData.address = address;
+    if (phone !== undefined) updateData.phone = phone;
+    if (email !== undefined) updateData.email = email;
+    if (latitude !== undefined) updateData.latitude = Number(latitude);
+    if (longitude !== undefined) updateData.longitude = Number(longitude);
+    if (coverageRadiusKm !== undefined) updateData.coverageRadiusKm = Number(coverageRadiusKm);
+    if (mapHref !== undefined) updateData.mapHref = mapHref;
+    if (isActive !== undefined) updateData.isActive = Boolean(isActive);
+
+    updateData.updatedAt = new Date();
+
+    const [updated] = await db
+      .update(storesTable)
+      .set(updateData)
+      .where(eq(storesTable.id, id))
+      .returning();
+
+    res.json({ success: true, message: "Store updated successfully", data: updated });
+  } catch (err: any) {
+    req.log.error(err, "Failed to update store");
+    res.status(500).json({ success: false, error: err.message || "Failed to update store" });
   }
 });
 

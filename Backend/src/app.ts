@@ -113,6 +113,12 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
+// Public root payment redirect: https://app.myfabclean.com/pay/:identifier
+app.get("/pay/:identifier", (req, res, next) => {
+  req.url = `/payments/pay/${encodeURIComponent(req.params.identifier)}`;
+  router(req, res, next);
+});
+
 // Global Error Handler to prevent stack trace leaks
 import { NextFunction, Request, Response } from "express";
 
