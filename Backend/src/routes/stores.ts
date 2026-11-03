@@ -82,13 +82,13 @@ router.get(["/stores", "/erp/website/stores", "/api/erp/website/stores"], async 
         return String(a.name).localeCompare(String(b.name));
       });
 
-    res.json({
+    return res.json({
       success: true,
       data,
     });
   } catch (err: any) {
     req.log.error(err, "Failed to load stores");
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: { code: "INTERNAL_ERROR", message: "Failed to load stores" },
     });
@@ -121,17 +121,17 @@ router.post(["/stores", "/erp/website/stores", "/api/erp/website/stores"], async
       })
       .returning();
 
-    res.json({ success: true, message: "Store created successfully", data: inserted });
+    return res.json({ success: true, message: "Store created successfully", data: inserted });
   } catch (err: any) {
     req.log.error(err, "Failed to create store");
-    res.status(500).json({ success: false, error: err.message || "Failed to create store" });
+    return res.status(500).json({ success: false, error: err.message || "Failed to create store" });
   }
 });
 
 // Update Store
 router.put(["/stores/:id", "/erp/website/stores/:id", "/api/erp/website/stores/:id"], async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params as { id: string };
     const { name, slug, address, phone, email, latitude, longitude, coverageRadiusKm, mapHref, isActive } = req.body || {};
 
     const updateData: Record<string, any> = {};

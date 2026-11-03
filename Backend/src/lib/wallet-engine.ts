@@ -447,7 +447,7 @@ export async function fetchUnifiedCustomerTransactions(
           }))
         : [];
       const services = items.length > 0
-        ? items.map((it) => it.name)
+        ? items.map((it: any) => it.name)
         : ["Dry Cleaning & Laundry"];
 
       return {

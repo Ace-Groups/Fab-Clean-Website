@@ -40,12 +40,37 @@ export async function createRazorpayOrder(params: {
     }),
   });
 
-  const body = await response.json();
+  const body: any = await response.json();
   if (!response.ok) {
     throw new Error(body?.error?.description || body?.message || "Failed to create Razorpay order");
   }
 
   return body as RazorpayOrderResponse;
+}
+
+/**
+ * Fetches an existing Razorpay order so server-side verification can bind a
+ * successful payment back to the Fab Clean order it was created for.
+ */
+export async function fetchRazorpayOrder(orderId: string): Promise<{
+  id: string;
+  amount: number;
+  amount_paid: number;
+  amount_due: number;
+  currency: string;
+  status: string;
+  notes?: Record<string, string>;
+}> {
+  const authHeader = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString("base64");
+  const response = await fetch(`https://api.razorpay.com/v1/orders/${encodeURIComponent(orderId)}`, {
+    method: "GET",
+    headers: { Authorization: `Basic ${authHeader}` },
+  });
+  const body: any = await response.json();
+  if (!response.ok) {
+    throw new Error(body?.error?.description || body?.message || "Failed to fetch Razorpay order");
+  }
+  return body;
 }
 
 /**

@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { requireAuth } from "../lib/auth.js";
 import {
   createRazorpayOrder,
+  fetchRazorpayOrder,
   verifyRazorpaySignature,
   verifyRazorpayWebhookSignature,
   getRazorpayPublicConfig,
@@ -10,6 +11,8 @@ import {
   fetchCustomerByPhone,
   fetchOwnedOrderById,
   fetchOrderByIdentifier,
+  isOrderCancelled,
+  computeOrderDue,
   updateCustomerById,
   updateOrder,
   insertTransaction,
@@ -30,6 +33,98 @@ import {
 } from "../lib/wallet-engine.js";
 
 const router: IRouter = Router();
+
+function cancelledOrderMessage(orderNumber?: string | null): string {
+  return `Order ${orderNumber ? `#${orderNumber} ` : ""}was cancelled. No payment is due.`;
+}
+
+/**
+ * Marks an order fully paid, records the payment in the wallet ledger, and
+ * dispatches the invoice/receipt. Shared by the authenticated dashboard flow
+ * and the public /pay/:identifier payment link flow.
+ */
+async function settleOrderPayment(params: {
+  order: any;
+  amountPaid: number;
+  paymentId: string;
+  paymentMethodLabel: string;
+  phone?: string;
+  log?: any;
+}): Promise<void> {
+  const { order, amountPaid, paymentId, paymentMethodLabel } = params;
+  const totalAmount = Number(order.total_amount ?? 0);
+  const previousAdvance = Number(order.advance_paid ?? 0);
+  const customerPhone = order.customer_phone || params.phone || "";
+
+  await updateOrder(order.id, {
+    payment_status: "paid",
+    payment_method:
+      previousAdvance > 0 && !String(order.payment_method || "").includes("online")
+        ? `${order.payment_method || "cash"} + online_upi`
+        : "online_razorpay",
+    advance_paid: totalAmount,
+    credit_used: 0,
+    is_credit_order: false,
+    updated_at: new Date().toISOString(),
+  });
+
+  const customer = customerPhone
+    ? await fetchCustomerByPhone(customerPhone).catch(() => null)
+    : null;
+
+  if (customer?.id && amountPaid > 0) {
+    try {
+      await recordOrderPaymentCredit({
+        customerId: customer.id,
+        orderId: order.id,
+        orderNumber: order.order_number,
+        amountPaid,
+        paymentMethod: "UPI",
+        referenceId: paymentId,
+      });
+    } catch (walErr) {
+      params.log?.warn?.(walErr, "Failed to record payment credit in wallet ledger");
+    }
+
+    await insertTransaction({
+      customer_id: customer.id,
+      order_id: order.id,
+      type: "ORDER_PAYMENT",
+      amount: amountPaid,
+      payment_method: "ONLINE_RAZORPAY",
+      status: "SUCCESS",
+      notes: `Razorpay: ${paymentId}`,
+    }).catch((err) => params.log?.warn?.(err, "Failed to insert transaction row"));
+  }
+
+  if (order.invoice_url && customerPhone) {
+    const itemsList = Array.isArray(order.items)
+      ? order.items.map((it: any) => it.serviceName || it.name || "Item").join(", ")
+      : "Dry Cleaning & Laundry";
+
+    void sendPaidInvoiceWhatsApp({
+      phoneNumber: customerPhone,
+      customerName: order.customer_name || customer?.name || "Customer",
+      orderNumber: order.order_number,
+      amount: amountPaid || totalAmount,
+      invoiceUrl: order.invoice_url,
+      itemsSummary: itemsList,
+    });
+  }
+
+  const targetEmail = customer?.email || order.customer_email;
+  if (targetEmail) {
+    void sendMsg91PaymentSuccessEmail({
+      customerEmail: targetEmail,
+      customerName: order.customer_name || customer?.name || "Customer",
+      amount: amountPaid || totalAmount,
+      transactionId: paymentId,
+      orderNumber: order.order_number,
+      paymentMethod: paymentMethodLabel,
+      receiptPdfUrl: order.invoice_url || undefined,
+    });
+  }
+}
 
 /**
  * GET /api/payments/config
@@ -63,6 +158,26 @@ router.get("/pay/:identifier", async (req, res) => {
       `);
     }
 
+    if (isOrderCancelled(order)) {
+      return res.status(410).send(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>Fab Clean - Order Cancelled</title><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; text-align: center; padding: 50px 20px; background: #fef2f2;">
+          <div style="max-width: 420px; margin: 0 auto; background: white; padding: 32px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #fecaca;">
+            <div style="font-size: 48px; margin-bottom: 12px;">🚫</div>
+            <h2 style="color: #991b1b; margin: 0 0 8px 0;">Order Cancelled</h2>
+            <p style="color: #4b5563; font-size: 15px; margin: 0 0 16px 0;">Order <strong>#${order.order_number}</strong> has been cancelled. No payment is due${order.cancellation_reason ? ` (${order.cancellation_reason})` : ""}.</p>
+            <div style="background: #f8fafc; border-radius: 8px; padding: 12px; font-size: 14px; color: #334155; margin-bottom: 20px;">
+              Any amount already paid will be refunded to your Fab Clean Pass.
+            </div>
+            <a href="https://myfabclean.com" style="display: inline-block; background: #0f172a; color: white; padding: 10px 24px; border-radius: 8px; text-decoration: none; font-weight: 600;">Visit Fab Clean</a>
+          </div>
+        </body>
+        </html>
+      `);
+    }
+
     if (order.payment_status === "paid") {
       return res.send(`
         <!DOCTYPE html>
@@ -91,7 +206,203 @@ router.get("/pay/:identifier", async (req, res) => {
     return res.redirect(302, `https://myfabclean.com/trackorder/${encodeURIComponent(order.order_number)}`);
   } catch (err: any) {
     req.log?.error(err, "Pay redirect failed");
-    res.status(500).send("Unable to process payment link");
+    return res.status(500).send("Unable to process payment link");
+  }
+});
+
+/**
+ * GET /api/pay/:identifier/status
+ * Public, read-only status for the payment link page (app.myfabclean.com/pay/:identifier).
+ * Returns only billing-safe fields and never exposes the raw order record.
+ */
+router.get("/pay/:identifier/status", async (req, res) => {
+  try {
+    const order = await fetchOrderByIdentifier(req.params.identifier as string);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        error: { code: "NOT_FOUND", message: "Order not found" },
+      });
+    }
+
+    const cancelled = isOrderCancelled(order);
+    const paid = String(order.payment_status || "").toLowerCase() === "paid";
+
+    return res.json({
+      success: true,
+      data: {
+        orderNumber: order.order_number,
+        customerName: order.customer_name,
+        status: order.status,
+        isCancelled: cancelled,
+        isPaid: !cancelled && paid,
+        amountDue: computeOrderDue(order),
+        totalAmount: Number(order.total_amount ?? 0),
+        advancePaid: Number(order.advance_paid ?? 0),
+        cancellationReason: order.cancellation_reason || null,
+        cancelledAt: order.cancelled_at || null,
+      },
+    });
+  } catch (err: any) {
+    req.log.error(err, "Failed to load payment link status");
+    return res.status(500).json({ success: false, error: { message: "Unable to load order" } });
+  }
+});
+
+/**
+ * POST /api/pay/:identifier/create-order
+ * Public payment-link checkout: creates a Razorpay order for the *current due
+ * balance only*. Refuses cancelled, paid, or zero-balance orders.
+ */
+router.post("/pay/:identifier/create-order", async (req, res) => {
+  try {
+    const order = await fetchOrderByIdentifier(req.params.identifier as string);
+    if (!order) {
+      return res.status(404).json({ success: false, error: { message: "Order not found" } });
+    }
+
+    if (isOrderCancelled(order)) {
+      return res.status(409).json({
+        success: false,
+        error: { code: "ORDER_CANCELLED", message: cancelledOrderMessage(order.order_number) },
+      });
+    }
+
+    if (String(order.payment_status || "").toLowerCase() === "paid") {
+      return res.status(400).json({ success: false, error: { message: "Order is already paid" } });
+    }
+
+    const amountDue = computeOrderDue(order);
+    if (amountDue <= 0) {
+      return res.status(400).json({ success: false, error: { message: "Outstanding balance is zero" } });
+    }
+
+    const receipt = `pay_${order.order_number.replace(/[^a-zA-Z0-9]/g, "").slice(-12)}_${Date.now().toString().slice(-5)}`;
+    const rzpOrder = await createRazorpayOrder({
+      amountInPaisa: Math.round(amountDue * 100),
+      receipt,
+      notes: {
+        type: "ORDER_PAYMENT",
+        orderId: order.id,
+        orderNumber: order.order_number,
+        phone: order.customer_phone || "",
+        source: "pay_link",
+      },
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        orderId: rzpOrder.id,
+        amount: rzpOrder.amount,
+        currency: rzpOrder.currency,
+        keyId: getRazorpayPublicConfig().keyId,
+        orderNumber: order.order_number,
+        amountDue,
+        customer: {
+          name: order.customer_name || "",
+          email: order.customer_email || "",
+          phone: order.customer_phone || "",
+        },
+      },
+    });
+  } catch (err: any) {
+    req.log.error(err, "Failed to create payment link order");
+    return res.status(500).json({ success: false, error: { message: err.message } });
+  }
+});
+
+/**
+ * POST /api/pay/:identifier/verify
+ * Public signature-verified settlement for the payment link. The Razorpay order
+ * is fetched server-side and must be bound to this Fab Clean order via notes.
+ */
+router.post("/pay/:identifier/verify", async (req, res) => {
+  try {
+    const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body || {};
+    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      return res.status(400).json({ success: false, error: { message: "Missing Razorpay verification parameters" } });
+    }
+
+    const order = await fetchOrderByIdentifier(req.params.identifier as string);
+    if (!order) {
+      return res.status(404).json({ success: false, error: { message: "Order not found" } });
+    }
+
+    if (isOrderCancelled(order)) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: "ORDER_CANCELLED",
+          message: `${cancelledOrderMessage(order.order_number)} Any captured payment will be refunded to your Fab Clean Pass.`,
+        },
+      });
+    }
+
+    if (String(order.payment_status || "").toLowerCase() === "paid") {
+      return res.json({
+        success: true,
+        message: `Order ${order.order_number} is already paid`,
+        data: { orderNumber: order.order_number, paymentStatus: "paid", alreadyPaid: true },
+      });
+    }
+
+    const isValid = verifyRazorpaySignature({
+      orderId: razorpayOrderId,
+      paymentId: razorpayPaymentId,
+      signature: razorpaySignature,
+    });
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: { message: "Invalid signature. Payment verification failed." } });
+    }
+
+    const rzpOrder = await fetchRazorpayOrder(razorpayOrderId).catch(() => null);
+    const boundOrderId = rzpOrder?.notes?.orderId;
+    const boundOrderNumber = rzpOrder?.notes?.orderNumber;
+    if (
+      !rzpOrder ||
+      (String(boundOrderId || "") !== String(order.id) &&
+        String(boundOrderNumber || "") !== String(order.order_number))
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: { message: "This payment does not belong to the requested order." },
+      });
+    }
+
+    const amountCaptured = Number(rzpOrder.amount ?? 0) / 100;
+    const amountDue = computeOrderDue(order);
+    const amountPaid = Math.min(amountDue, amountCaptured);
+
+    if (amountPaid <= 0) {
+      return res.json({
+        success: true,
+        message: `Order ${order.order_number} has no outstanding balance`,
+        data: { orderNumber: order.order_number, paymentStatus: "paid" },
+      });
+    }
+
+    await settleOrderPayment({
+      order,
+      amountPaid,
+      paymentId: razorpayPaymentId,
+      paymentMethodLabel: "Razorpay (Online)",
+      log: req.log,
+    });
+
+    return res.json({
+      success: true,
+      message: `Order ${order.order_number} marked as Paid!`,
+      data: {
+        orderNumber: order.order_number,
+        paymentStatus: "paid",
+        paymentId: razorpayPaymentId,
+        amountPaid,
+      },
+    });
+  } catch (err: any) {
+    req.log.error(err, "Failed to verify payment link payment");
+    return res.status(500).json({ success: false, error: { message: err.message } });
   }
 });
 
@@ -101,18 +412,18 @@ router.get("/pay/:identifier", async (req, res) => {
  */
 router.get("/wallet/transactions", requireAuth, async (req, res) => {
   try {
-    const customer = await fetchCustomerByPhone(req.authUser!.phone);
+    const customer = await fetchCustomerByPhone(req.authUser!.phone!);
     if (!customer?.id) {
       return res.json({ success: true, data: [] });
     }
-    const transactions = await fetchUnifiedCustomerTransactions(customer.id, req.authUser!.phone);
-    res.json({
+    const transactions = await fetchUnifiedCustomerTransactions(customer.id, req.authUser!.phone!);
+    return res.json({
       success: true,
       data: transactions,
     });
   } catch (err: any) {
     req.log.error(err, "Failed to fetch wallet transactions");
-    res.status(500).json({ success: false, error: { message: err.message } });
+    return res.status(500).json({ success: false, error: { message: err.message } });
   }
 });
 
@@ -131,7 +442,7 @@ router.post("/wallet/create-recharge-order", requireAuth, async (req, res) => {
       });
     }
 
-    const customer = await fetchCustomerByPhone(req.authUser!.phone);
+    const customer = await fetchCustomerByPhone(req.authUser!.phone!);
     if (!customer?.id) {
       return res.status(404).json({
         success: false,
@@ -146,12 +457,12 @@ router.post("/wallet/create-recharge-order", requireAuth, async (req, res) => {
       notes: {
         type: "WALLET_RECHARGE",
         customerId: customer.id,
-        phone: req.authUser!.phone,
+        phone: req.authUser!.phone!,
         customerName: customer.name || "Customer",
       },
     });
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         orderId: rzpOrder.id,
@@ -161,13 +472,13 @@ router.post("/wallet/create-recharge-order", requireAuth, async (req, res) => {
         customer: {
           name: customer.name || "",
           email: customer.email || "",
-          phone: customer.phone || req.authUser!.phone,
+          phone: customer.phone || req.authUser!.phone!,
         },
       },
     });
   } catch (err: any) {
     req.log.error(err, "Failed to create wallet recharge order");
-    res.status(500).json({ success: false, error: { message: err.message } });
+    return res.status(500).json({ success: false, error: { message: err.message } });
   }
 });
 
@@ -193,7 +504,7 @@ router.post("/wallet/verify-recharge", requireAuth, async (req, res) => {
     });
 
     if (!isValid) {
-      const customer = await fetchCustomerByPhone(req.authUser!.phone).catch(() => null);
+      const customer = await fetchCustomerByPhone(req.authUser!.phone!).catch(() => null);
       if (customer?.email) {
         void sendMsg91PaymentFailedEmail({
           customerEmail: customer.email,
@@ -211,7 +522,7 @@ router.post("/wallet/verify-recharge", requireAuth, async (req, res) => {
       });
     }
 
-    const customer = await fetchCustomerByPhone(req.authUser!.phone);
+    const customer = await fetchCustomerByPhone(req.authUser!.phone!);
     if (!customer?.id) {
       return res.status(404).json({ success: false, error: { message: "Customer profile not found" } });
     }
@@ -250,7 +561,7 @@ router.post("/wallet/verify-recharge", requireAuth, async (req, res) => {
     let settlementMessage = `₹${rechargeAmount} added to your wallet successfully!`;
     let settleResult = null;
     try {
-      settleResult = await autoSettleCustomerDueOrders(customer.id, req.authUser!.phone);
+      settleResult = await autoSettleCustomerDueOrders(customer.id, req.authUser!.phone!);
       if (settleResult.settledOrders.length > 0) {
         const clearedNumbers = settleResult.settledOrders.map((o) => `#${o.orderNumber}`).join(", ");
         settlementMessage = `₹${rechargeAmount} added! Automatically settled ${settleResult.settledOrders.length} due order(s) (${clearedNumbers})!`;
@@ -259,10 +570,10 @@ router.post("/wallet/verify-recharge", requireAuth, async (req, res) => {
       req.log.error(settleErr, "Auto-settlement failed after wallet recharge");
     }
 
-    const updatedCustomer = await fetchCustomerByPhone(req.authUser!.phone);
+    const updatedCustomer = await fetchCustomerByPhone(req.authUser!.phone!);
     const resolvedBalance = Number(updatedCustomer?.wallet_balance_cache ?? (settleResult?.remainingWalletBalance ?? newBalance));
 
-    res.json({
+    return res.json({
       success: true,
       message: settlementMessage,
       data: {
@@ -273,7 +584,7 @@ router.post("/wallet/verify-recharge", requireAuth, async (req, res) => {
     });
   } catch (err: any) {
     req.log.error(err, "Failed to verify wallet recharge");
-    res.status(500).json({ success: false, error: { message: err.message } });
+    return res.status(500).json({ success: false, error: { message: err.message } });
   }
 });
 
@@ -283,11 +594,18 @@ router.post("/wallet/verify-recharge", requireAuth, async (req, res) => {
  */
 router.post("/orders/:id/create-pay-order", requireAuth, async (req, res) => {
   try {
-    const orderId = req.params.id;
-    const order = await fetchOwnedOrderById(req.authUser!.phone, orderId);
+    const orderId = req.params.id as string;
+    const order = await fetchOwnedOrderById(req.authUser!.phone!, orderId);
 
     if (!order) {
       return res.status(404).json({ success: false, error: { message: "Order not found" } });
+    }
+
+    if (isOrderCancelled(order)) {
+      return res.status(409).json({
+        success: false,
+        error: { code: "ORDER_CANCELLED", message: cancelledOrderMessage(order.order_number) },
+      });
     }
 
     if (order.payment_status === "paid") {
@@ -295,14 +613,13 @@ router.post("/orders/:id/create-pay-order", requireAuth, async (req, res) => {
     }
 
     const totalAmount = Number(order.total_amount ?? 0);
-    const previousAdvance = Number((order as any).advance_paid ?? 0);
-    const amountToPay = Number((order as any).credit_used ?? Math.max(0, totalAmount - previousAdvance));
+    const amountToPay = computeOrderDue(order);
 
     if (amountToPay <= 0) {
       return res.status(400).json({ success: false, error: { message: "Outstanding balance is zero" } });
     }
 
-    const customer = await fetchCustomerByPhone(req.authUser!.phone);
+    const customer = await fetchCustomerByPhone(req.authUser!.phone!);
     const receipt = `ord_${order.order_number.replace(/[^a-zA-Z0-9]/g, "").slice(-8)}`;
 
     const rzpOrder = await createRazorpayOrder({
@@ -313,12 +630,12 @@ router.post("/orders/:id/create-pay-order", requireAuth, async (req, res) => {
         orderId: order.id,
         orderNumber: order.order_number,
         customerId: customer?.id || "",
-        phone: req.authUser!.phone,
+        phone: req.authUser!.phone!,
         creditSettlement: String(amountToPay),
       },
     });
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         orderId: rzpOrder.id,
@@ -331,13 +648,13 @@ router.post("/orders/:id/create-pay-order", requireAuth, async (req, res) => {
         customer: {
           name: customer?.name || order.customer_name || "",
           email: customer?.email || "",
-          phone: customer?.phone || req.authUser!.phone,
+          phone: customer?.phone || req.authUser!.phone!,
         },
       },
     });
   } catch (err: any) {
     req.log.error(err, "Failed to create order payment");
-    res.status(500).json({ success: false, error: { message: err.message } });
+    return res.status(500).json({ success: false, error: { message: err.message } });
   }
 });
 
@@ -347,7 +664,7 @@ router.post("/orders/:id/create-pay-order", requireAuth, async (req, res) => {
  */
 router.post("/orders/:id/verify-pay", requireAuth, async (req, res) => {
   try {
-    const orderId = req.params.id;
+    const orderId = req.params.id as string;
     const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
 
     if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
@@ -364,7 +681,7 @@ router.post("/orders/:id/verify-pay", requireAuth, async (req, res) => {
     });
 
     if (!isValid) {
-      const customer = await fetchCustomerByPhone(req.authUser!.phone).catch(() => null);
+      const customer = await fetchCustomerByPhone(req.authUser!.phone!).catch(() => null);
       if (customer?.email) {
         void sendMsg91PaymentFailedEmail({
           customerEmail: customer.email,
@@ -382,84 +699,33 @@ router.post("/orders/:id/verify-pay", requireAuth, async (req, res) => {
       });
     }
 
-    const order = await fetchOwnedOrderById(req.authUser!.phone, orderId);
+    const order = await fetchOwnedOrderById(req.authUser!.phone!, orderId);
     if (!order) {
       return res.status(404).json({ success: false, error: { message: "Order not found" } });
     }
 
-    const customer = await fetchCustomerByPhone(req.authUser!.phone);
-    const totalAmount = Number(order.total_amount ?? 0);
-    const previousAdvance = Number((order as any).advance_paid ?? 0);
-    const amountPaid = Number((order as any).credit_used ?? Math.max(0, totalAmount - previousAdvance));
+    if (isOrderCancelled(order)) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: "ORDER_CANCELLED",
+          message: `${cancelledOrderMessage(order.order_number)} Any captured payment will be refunded to your Fab Clean Pass.`,
+        },
+      });
+    }
 
-    // 1. Update Order in Supabase to PAID
-    await updateOrder(order.id, {
-      payment_status: "paid",
-      payment_method: previousAdvance > 0 ? `${(order as any).payment_method || "cash"} + online_upi` : "online_razorpay",
-      advance_paid: totalAmount,
-      credit_used: 0,
-      is_credit_order: false,
-      updated_at: new Date().toISOString(),
+    const amountPaid = computeOrderDue(order);
+
+    await settleOrderPayment({
+      order,
+      amountPaid,
+      paymentId: razorpayPaymentId,
+      paymentMethodLabel: "Razorpay (Online)",
+      phone: req.authUser!.phone!,
+      log: req.log,
     });
 
-    // 2. Settle customer wallet & credit ledger for this online order payment
-    if (customer?.id && amountPaid > 0) {
-      try {
-        await recordOrderPaymentCredit({
-          customerId: customer.id,
-          orderId: order.id,
-          orderNumber: order.order_number,
-          amountPaid,
-          paymentMethod: "UPI",
-          referenceId: razorpayPaymentId,
-        });
-      } catch (walErr) {
-        req.log?.warn(walErr, "Failed to record payment credit in wallet ledger");
-      }
-
-      // Insert transaction ledger
-      await insertTransaction({
-        customer_id: customer.id,
-        order_id: order.id,
-        type: "ORDER_PAYMENT",
-        amount: amountPaid,
-        payment_method: "ONLINE_RAZORPAY",
-        status: "SUCCESS",
-        notes: `Razorpay: ${razorpayPaymentId}`,
-      }).catch((err) => req.log.warn(err, "Failed to insert transaction row"));
-    }
-
-    // 3. Trigger WhatsApp Paid Invoice
-    if (order.invoice_url) {
-      const itemsList = Array.isArray(order.items)
-        ? order.items.map((it: any) => it.serviceName || it.name || "Item").join(", ")
-        : "Dry Cleaning & Laundry";
-
-      void sendPaidInvoiceWhatsApp({
-        phoneNumber: req.authUser!.phone,
-        customerName: order.customer_name || customer?.name || "Customer",
-        orderNumber: order.order_number,
-        amount: amountPaid,
-        invoiceUrl: order.invoice_url,
-        itemsSummary: itemsList,
-      });
-    }
-
-    // 4. Dispatch Payment Received E-Receipt via MSG91 Email
-    const customerEmail = customer?.email || (order as any).customer_email;
-    if (customerEmail) {
-      void sendMsg91PaymentSuccessEmail({
-        customerEmail,
-        customerName: order.customer_name || customer?.name || "Customer",
-        amount: amountPaid,
-        transactionId: razorpayPaymentId,
-        orderNumber: order.order_number,
-        paymentMethod: "Razorpay (Online)",
-        receiptPdfUrl: order.invoice_url || undefined,
-      });
-    }
-
-    res.json({
+    return res.json({
       success: true,
       message: `Order ${order.order_number} marked as Paid!`,
       data: {
@@ -471,7 +737,7 @@ router.post("/orders/:id/verify-pay", requireAuth, async (req, res) => {
     });
   } catch (err: any) {
     req.log.error(err, "Failed to verify order payment");
-    res.status(500).json({ success: false, error: { message: err.message } });
+    return res.status(500).json({ success: false, error: { message: err.message } });
   }
 });
 
@@ -481,26 +747,33 @@ router.post("/orders/:id/verify-pay", requireAuth, async (req, res) => {
  */
 router.post("/orders/:id/pay-with-wallet", requireAuth, async (req, res) => {
   try {
-    const orderId = req.params.id;
-    const order = await fetchOwnedOrderById(req.authUser!.phone, orderId);
+    const orderId = req.params.id as string;
+    const order = await fetchOwnedOrderById(req.authUser!.phone!, orderId);
 
     if (!order) {
       return res.status(404).json({ success: false, error: { message: "Order not found" } });
+    }
+
+    if (isOrderCancelled(order)) {
+      return res.status(409).json({
+        success: false,
+        error: { code: "ORDER_CANCELLED", message: cancelledOrderMessage(order.order_number) },
+      });
     }
 
     if (order.payment_status === "paid") {
       return res.status(400).json({ success: false, error: { message: "Order is already paid" } });
     }
 
-    const customer = await fetchCustomerByPhone(req.authUser!.phone);
+    const customer = await fetchCustomerByPhone(req.authUser!.phone!);
     if (!customer?.id) {
       return res.status(404).json({ success: false, error: { message: "Customer profile not found" } });
     }
 
     const currentWallet = Number(customer.wallet_balance_cache ?? 0);
     const totalAmount = Number(order.total_amount ?? 0);
-    const currentAdvance = Number((order as any).advance_paid ?? 0);
-    const amountToPay = Number((order as any).credit_used ?? Math.max(0, totalAmount - currentAdvance));
+    const currentAdvance = Number(order.advance_paid ?? 0);
+    const amountToPay = computeOrderDue(order);
 
     if (amountToPay <= 0) {
       return res.status(400).json({ success: false, error: { message: "Outstanding balance is zero" } });
@@ -543,7 +816,7 @@ router.post("/orders/:id/pay-with-wallet", requireAuth, async (req, res) => {
         : "Dry Cleaning & Laundry";
 
       void sendPaidInvoiceWhatsApp({
-        phoneNumber: req.authUser!.phone,
+        phoneNumber: req.authUser!.phone!,
         customerName: order.customer_name || customer.name || "Customer",
         orderNumber: order.order_number,
         amount: amountToPay,
@@ -566,7 +839,7 @@ router.post("/orders/:id/pay-with-wallet", requireAuth, async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: `Order ${order.order_number} paid successfully with Wallet!`,
       data: {
@@ -578,7 +851,7 @@ router.post("/orders/:id/pay-with-wallet", requireAuth, async (req, res) => {
     });
   } catch (err: any) {
     req.log.error(err, "Failed to pay with wallet");
-    res.status(500).json({ success: false, error: { message: err.message } });
+    return res.status(500).json({ success: false, error: { message: err.message } });
   }
 });
 
@@ -667,7 +940,12 @@ router.post("/payments/webhook", async (req, res) => {
           }
         }
 
-        if (order) {
+        if (order && isOrderCancelled(order)) {
+          req.log.warn(
+            { orderNumber: order.order_number, paymentId, amountInRupees },
+            "Webhook: ignoring payment for cancelled order (refund required)",
+          );
+        } else if (order) {
           const totalAmount = Number(order.total_amount ?? amountInRupees);
           const customerPhone = order.customer_phone || notes.phone || "";
 
@@ -739,10 +1017,10 @@ router.post("/payments/webhook", async (req, res) => {
       }
     }
 
-    res.json({ status: "ok" });
+    return res.json({ status: "ok" });
   } catch (err: any) {
     req.log.error(err, "Webhook processing error");
-    res.status(500).json({ status: "error", message: err.message });
+    return res.status(500).json({ status: "error", message: err.message });
   }
 });
 

@@ -228,10 +228,10 @@ router.get("/services/:id", async (req, res) => {
     if (!rows[0]) {
       return res.status(404).json({ error: "Service not found" });
     }
-    res.json(rows[0]);
+    return res.json(rows[0]);
   } catch (err: any) {
     req.log?.error(err, "Failed to fetch service");
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
@@ -368,10 +368,10 @@ router.get("/customers/:id/addresses", async (req, res) => {
         }
       });
     }
-    res.json({ success: true, data: addressList });
+    return res.json({ success: true, data: addressList });
   } catch (err: any) {
     req.log?.error(err, "Failed to load customer addresses");
-    res.status(500).json({ success: false, data: [] });
+    return res.status(500).json({ success: false, data: [] });
   }
 });
 
@@ -381,10 +381,10 @@ router.get("/customers/:id", async (req, res) => {
     if (!rows[0]) {
       return res.status(404).json({ error: "Customer not found" });
     }
-    res.json(mapCustomer(rows[0]));
+    return res.json(mapCustomer(rows[0]));
   } catch (err: any) {
     req.log?.error(err, "Failed to fetch customer");
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
@@ -550,6 +550,7 @@ router.get("/orders", async (req, res, next) => {
 
   // Otherwise, pass to customer portal handler in portal.ts
   next();
+  return;
 });
 
 
@@ -563,10 +564,10 @@ router.get("/orders/print-queue", async (req, res) => {
     const unprinted = (rows || [])
       .filter((r) => !r.tags_printed && r.status !== "cancelled")
       .map(mapOrderForErp);
-    res.json({ success: true, data: unprinted });
+    return res.json({ success: true, data: unprinted });
   } catch (err: any) {
     req.log?.error(err, "Failed to fetch print queue");
-    res.json({ success: true, data: [] });
+    return res.json({ success: true, data: [] });
   }
 });
 
@@ -600,9 +601,9 @@ router.get("/orders/:id/logs", async (req, res) => {
       }
     ];
 
-    res.json({ success: true, data: logs });
+    return res.json({ success: true, data: logs });
   } catch (err: any) {
-    res.json({ success: true, data: [] });
+    return res.json({ success: true, data: [] });
   }
 });
 
@@ -1040,7 +1041,7 @@ router.post("/v1/bookings/:id/convert-to-order", async (req, res) => {
       },
     );
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         order: {
@@ -1051,7 +1052,7 @@ router.post("/v1/bookings/:id/convert-to-order", async (req, res) => {
     });
   } catch (err: any) {
     req.log?.error(err, "Failed to convert booking to order");
-    res.status(500).json({ success: false, message: err.message || "Failed to convert booking" });
+    return res.status(500).json({ success: false, message: err.message || "Failed to convert booking" });
   }
 });
 
@@ -1505,7 +1506,7 @@ router.get(['/erp/account-deletion-requests', '/api/erp/account-deletion-request
 // Update Deletion Request Status (Approve/Erase, Retain, Dismiss)
 router.post(['/erp/account-deletion-requests/:key/action', '/api/erp/account-deletion-requests/:key/action'], async (req, res) => {
   try {
-    const key = req.params.key;
+    const key = req.params.key as string;
     const { action, adminNotes } = req.body || {};
 
     const rows = await supabaseRequest<any[]>(`/rest/v1/settings?key=eq.${encodeURIComponent(key)}&limit=1`, 'GET').catch(() => []);
@@ -1540,17 +1541,17 @@ router.post(['/erp/account-deletion-requests/:key/action', '/api/erp/account-del
       updated_by: 'erp_admin',
     }, { Prefer: 'return=minimal' });
 
-    res.json({ success: true, message: `Request updated to ${newStatus}`, data: parsed });
+    return res.json({ success: true, message: `Request updated to ${newStatus}`, data: parsed });
   } catch (err: any) {
     req.log?.error(err, 'Failed to update deletion request');
-    res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // Referral Program & Statistics for App Management Hub
 router.get(['/erp/app-management/referrals', '/api/erp/app-management/referrals'], async (req, res) => {
   try {
-    const rows = await supabaseRequest<any[]>('/rest/v1/portal_referrals?select=*&order=created_at.desc&limit=100', 'GET').catch(() => []);
+    const rows: any[] = await supabaseRequest<any[]>('/rest/v1/portal_referrals?select=*&order=created_at.desc&limit=100', 'GET').catch(() => []);
     const settingsRows = await supabaseRequest<any[]>('/rest/v1/settings?category=eq.app_config&key=eq.referral_program&limit=1', 'GET').catch(() => []);
     let config = { referrerBonus: 50, refereeBonus: 25, isActive: true };
     if (settingsRows?.[0]?.value) {
@@ -1629,9 +1630,9 @@ router.post(['/erp/app-management/banners', '/api/erp/app-management/banners'], 
       await supabaseRequest('/rest/v1/settings', 'POST', payload);
     }
 
-    res.json({ success: true, message: 'Banner updated successfully', banner });
+    return res.json({ success: true, message: 'Banner updated successfully', banner });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 

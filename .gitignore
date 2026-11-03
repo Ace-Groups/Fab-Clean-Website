@@ -11,3 +11,6 @@ dist-build
 .impeccable/mocks
 .impeccable/build
 .impeccable/questions
+
+# build info caches
+*.tsbuildinfo

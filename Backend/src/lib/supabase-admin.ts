@@ -59,9 +59,18 @@ export type PublicOrderRecord = {
   customer_id: string | null;
   customer_name: string | null;
   customer_phone: string | null;
+  customer_email?: string | null;
   status: string;
   payment_status: string | null;
   total_amount: number | string | null;
+  advance_paid?: number | string | null;
+  wallet_used?: number | string | null;
+  credit_used?: number | string | null;
+  payment_method?: string | null;
+  is_credit_order?: boolean | null;
+  cancellation_reason?: string | null;
+  cancelled_at?: string | null;
+  cancelled_by?: string | null;
   items: unknown[] | null;
   fulfillment_type: string | null;
   pickup_date: string | null;
@@ -74,6 +83,64 @@ export type PublicOrderRecord = {
   ai_sentiment?: string | null;
   ai_score?: number | null;
 };
+
+/**
+ * Columns every public/portal order query must fetch.
+ * Keeping this in one place prevents views from silently losing payment or
+ * cancellation data (which previously caused cancelled orders to show a
+ * balance due and an active "Pay" button).
+ */
+export const PUBLIC_ORDER_SELECT = [
+  "id",
+  "order_number",
+  "customer_id",
+  "customer_name",
+  "customer_phone",
+  "customer_email",
+  "status",
+  "payment_status",
+  "total_amount",
+  "advance_paid",
+  "wallet_used",
+  "credit_used",
+  "payment_method",
+  "is_credit_order",
+  "cancellation_reason",
+  "cancelled_at",
+  "cancelled_by",
+  "items",
+  "fulfillment_type",
+  "pickup_date",
+  "invoice_url",
+  "created_at",
+  "updated_at",
+  "rating",
+  "feedback",
+  "ai_category",
+  "ai_sentiment",
+  "ai_score",
+].join(",");
+
+export function isOrderCancelled(order: { status?: string | null } | null | undefined): boolean {
+  const status = String(order?.status ?? "").trim().toLowerCase();
+  return status === "cancelled" || status === "canceled";
+}
+
+/**
+ * Single source of truth for the amount a customer still owes on an order.
+ * Cancelled orders never owe anything, regardless of stale payment rows.
+ */
+export function computeOrderDue(order: {
+  status?: string | null;
+  total_amount?: number | string | null;
+  advance_paid?: number | string | null;
+} | null | undefined): number {
+  if (!order || isOrderCancelled(order)) return 0;
+  const total = Number(order.total_amount ?? 0);
+  const advance = Number(order.advance_paid ?? 0);
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  return Math.max(0, total - (Number.isFinite(advance) ? advance : 0));
+}
 
 export type ReviewRecord = {
   id: string;
@@ -113,6 +180,7 @@ export type CustomerRecord = {
   credit_balance?: number | string | null;
   total_orders?: number | string | null;
   total_spent?: number | string | null;
+  credit_limit?: number | string | null;
   created_at?: string | null;
 };
 
@@ -124,6 +192,7 @@ export type WalletSummary = {
 };
 
 export type AppStoreRecord = {
+  id?: string;
   code: string;
   slug: string;
   name: string;
@@ -174,8 +243,7 @@ export async function fetchOrderByIdentifier(identifier: string): Promise<Public
   const clean = normalizeOrderIdentifier(identifier);
   if (!clean) return null;
 
-  const select =
-    "id,order_number,customer_id,customer_name,customer_phone,status,payment_status,total_amount,items,fulfillment_type,pickup_date,invoice_url,created_at,updated_at,rating,feedback,ai_category,ai_sentiment,ai_score";
+  const select = PUBLIC_ORDER_SELECT;
 
   if (isUuid(clean)) {
     const byId = await request<PublicOrderRecord[]>(
@@ -248,8 +316,7 @@ export async function createCustomer(payload: Record<string, unknown>): Promise<
 export async function fetchOrdersByPhone(phone: string): Promise<PublicOrderRecord[]> {
   const cleanPhone = normalizePhone(phone);
   const customer = await fetchCustomerByPhone(cleanPhone);
-  const select =
-    "id,order_number,customer_id,customer_name,customer_phone,status,payment_status,total_amount,items,fulfillment_type,pickup_date,invoice_url,created_at,updated_at,rating,feedback,ai_category,ai_sentiment,ai_score";
+  const select = PUBLIC_ORDER_SELECT;
 
   const candidates = phoneCandidates(cleanPhone);
   if (customer?.phone) {

@@ -4,12 +4,14 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { db, pool } from "@workspace/db";
 import { pickupsTable, usersTable } from "@workspace/db";
-import { desc, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray, sql } from "drizzle-orm";
 import { requireAuth, JWT_SECRET, normalizePhone } from "../lib/auth.js";
 import {
   fetchCustomerByPhone,
   fetchOrdersByPhone,
   fetchOwnedOrderById,
+  isOrderCancelled,
+  computeOrderDue,
   mapWalletSummary,
   updateCustomerById,
   createCustomer,
@@ -25,8 +27,10 @@ const router: IRouter = Router();
 
 function mapOrder(order: Awaited<ReturnType<typeof fetchOrdersByPhone>>[number]) {
   const total = Number(order.total_amount ?? 0);
-  const advance = Number((order as any).advance_paid ?? 0);
-  const credit = Number((order as any).credit_used ?? Math.max(0, total - advance));
+  const advance = Number(order.advance_paid ?? 0);
+  const credit = Number(order.credit_used ?? Math.max(0, total - advance));
+  const cancelled = isOrderCancelled(order);
+  const dueAmount = computeOrderDue(order);
   const rawItems = Array.isArray(order.items) ? order.items : [];
   const normalizedItems = rawItems.map((item: any) => ({
     name: item.serviceName || item.name || "Garment Service",
@@ -45,12 +49,17 @@ function mapOrder(order: Awaited<ReturnType<typeof fetchOrdersByPhone>>[number])
     scheduledDate: order.pickup_date || undefined,
     createdAt: order.created_at,
     totalAmount: total,
-    paymentStatus: order.payment_status || (credit > 0 ? (advance > 0 ? "partial" : "unpaid") : "paid"),
-    paymentMethod: (order as any).payment_method || "credit",
+    isCancelled: cancelled,
+    cancelledAt: order.cancelled_at || null,
+    cancellationReason: order.cancellation_reason || null,
+    paymentStatus: cancelled
+      ? "cancelled"
+      : order.payment_status || (credit > 0 ? (advance > 0 ? "partial" : "unpaid") : "paid"),
+    paymentMethod: order.payment_method || "credit",
     advancePaid: advance,
     creditAmount: credit,
-    dueAmount: Math.max(0, total - advance),
-    isCreditOrder: Boolean((order as any).is_credit_order || credit > 0),
+    dueAmount,
+    isCreditOrder: !cancelled && Boolean(order.is_credit_order || credit > 0),
     invoiceUrl: order.invoice_url || `/api/orders/${order.id}/receipt`,
     stainPhotos: Array.isArray((order as any).stain_photos || (order as any).stainPhotos)
       ? ((order as any).stain_photos || (order as any).stainPhotos)
@@ -76,7 +85,7 @@ function phoneCandidates(phone: string): string[] {
 
 router.get("/orders", requireAuth, async (req, res) => {
   try {
-    const orders = await fetchOrdersByPhone(req.authUser!.phone);
+    const orders = await fetchOrdersByPhone(req.authUser!.phone!);
     res.json({
       success: true,
       data: orders.map(mapOrder),
@@ -92,7 +101,7 @@ router.get("/orders", requireAuth, async (req, res) => {
 
 router.get("/orders/:id", requireAuth, async (req, res) => {
   try {
-    const order = await fetchOwnedOrderById(req.authUser!.phone, req.params.id as string);
+    const order = await fetchOwnedOrderById(req.authUser!.phone!, req.params.id as string);
     if (!order) {
       res.status(404).json({
         success: false,
@@ -144,8 +153,13 @@ router.get("/orders/:id/receipt", async (req, res) => {
       day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
     }) : "Recent";
     const isPaid = mapped.paymentStatus === "paid";
-    const statusBg = isPaid ? "#dcfce7" : "#fef3c7";
-    const statusColor = isPaid ? "#166534" : "#b45309";
+    const statusBg = mapped.isCancelled ? "#fee2e2" : isPaid ? "#dcfce7" : "#fef3c7";
+    const statusColor = mapped.isCancelled ? "#b91c1c" : isPaid ? "#166534" : "#b45309";
+    const cancelledNotice = mapped.isCancelled
+      ? `<div style="background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; border-radius: 12px; padding: 12px 14px; font-size: 12.5px; font-weight: 600; margin-bottom: 16px;">
+          This order was cancelled${mapped.cancellationReason ? ` (${mapped.cancellationReason})` : ""}. No payment is due. Any amount already paid will be refunded to your Fab Clean Pass.
+        </div>`
+      : "";
 
     const itemsRows = mapped.items.map((it) => `
       <tr style="border-bottom: 1px solid #f1f5f9;">
@@ -192,6 +206,7 @@ router.get("/orders/:id/receipt", async (req, res) => {
           <div style="font-size: 12px; color: #64748b; margin-top: 2px;">${order.customer_phone || ""}</div>
         </div>
       </div>
+      ${cancelledNotice}
       <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
         <thead>
           <tr style="border-bottom: 2px solid #e2e8f0; color: #64748b; text-align: left; font-size: 11px; text-transform: uppercase;">
@@ -248,7 +263,7 @@ router.get("/users/profile", requireAuth, async (req, res) => {
       db.query.usersTable.findFirst({
         where: eq(usersTable.id, req.authUser!.userId),
       }),
-      fetchCustomerByPhone(req.authUser!.phone),
+      fetchCustomerByPhone(req.authUser!.phone!),
     ]);
 
     const customerAddr = (typeof customer?.address === "object" && customer?.address !== null)
@@ -272,7 +287,7 @@ router.get("/users/profile", requireAuth, async (req, res) => {
       success: true,
       data: {
         id: user?.id || req.authUser!.userId,
-        phone: req.authUser!.phone,
+        phone: req.authUser!.phone!,
         name: user?.name || customer?.name || undefined,
         email: user?.email || customer?.email || undefined,
         emailVerified,
@@ -391,7 +406,7 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
       db.query.usersTable.findFirst({
         where: eq(usersTable.id, req.authUser!.userId),
       }),
-      fetchCustomerByPhone(req.authUser!.phone),
+      fetchCustomerByPhone(req.authUser!.phone!),
     ]);
 
     // If email is changed, reset email verification status to false until re-verified with OTP
@@ -434,7 +449,7 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
     } else {
       updatedCustomer = await createCustomer({
         name: name || updatedUser?.name || "Customer",
-        phone: req.authUser!.phone,
+        phone: req.authUser!.phone!,
         email: email || null,
         address: newAddressObj,
         status: "active",
@@ -459,7 +474,7 @@ router.patch("/users/profile", requireAuth, async (req, res) => {
       success: true,
       data: {
         id: updatedUser?.id || req.authUser!.userId,
-        phone: req.authUser!.phone,
+        phone: req.authUser!.phone!,
         name: updatedUser?.name || updatedCustomer?.name || undefined,
         email: updatedUser?.email || updatedCustomer?.email || undefined,
         emailVerified: resolvedEmailVerified,
@@ -507,7 +522,7 @@ router.post("/users/send-email-otp", requireAuth, async (req, res) => {
     const emailResult = await sendMsg91EmailOtp({
       email: targetEmail,
       otp: code,
-      customerName: customer?.name || req.authUser!.phone,
+      customerName: customer?.name || req.authUser!.phone!,
     });
 
     if (!emailResult.success) {
@@ -625,7 +640,7 @@ router.post("/users/verify-email-otp", requireAuth, async (req, res) => {
 
 router.get("/wallet/summary", requireAuth, async (req, res) => {
   try {
-    const customer = await fetchCustomerByPhone(req.authUser!.phone);
+    const customer = await fetchCustomerByPhone(req.authUser!.phone!);
     res.json({
       success: true,
       data: {
@@ -650,7 +665,7 @@ router.get("/wallet/summary", requireAuth, async (req, res) => {
 router.get(["/referral-info", "/portal/referral-info"], requireAuth, async (req, res) => {
   try {
     const userId = req.authUser!.userId;
-    const phone = req.authUser!.phone || "";
+    const phone = req.authUser!.phone! || "";
     
     // Deterministic referral code: "FAB" + 6 chars of user UUID
     const referralCode = `FAB${userId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
@@ -665,7 +680,7 @@ router.get(["/referral-info", "/portal/referral-info"], requireAuth, async (req,
       [userId, candidates]
     ).catch(() => ({ rows: [] }));
 
-    const rows = referralsQuery.rows || [];
+    const rows: any[] = (referralsQuery as any).rows || [];
     const totalInvited = rows.length;
     const successfulConversions = rows.filter((r: any) => r.status === "credited" || r.status === "completed").length;
     const totalEarned = rows.reduce((sum: number, r: any) => sum + Number(r.referrer_reward || 50), 0);
@@ -845,7 +860,7 @@ router.post(["/apply-referral", "/portal/apply-referral"], async (req, res) => {
 
 router.get("/pickups", requireAuth, async (req, res) => {
   try {
-    const candidates = phoneCandidates(req.authUser!.phone);
+    const candidates = phoneCandidates(req.authUser!.phone!);
     if (candidates.length === 0) {
       res.json({ success: true, data: [], meta: { total: 0 } });
       return;
@@ -932,7 +947,7 @@ router.post("/users/avatar", requireAuth, async (req, res) => {
     const publicUrl = `${baseUrl}/storage/v1/object/public/avatars/${filename}`;
 
     // Update customer profile with the new avatar_url
-    const customer = await fetchCustomerByPhone(req.authUser!.phone);
+    const customer = await fetchCustomerByPhone(req.authUser!.phone!);
     if (customer?.id) {
       const currentAddr = (typeof customer.address === "object" && customer.address !== null)
         ? (customer.address as Record<string, unknown>)
@@ -942,10 +957,10 @@ router.post("/users/avatar", requireAuth, async (req, res) => {
       });
     }
 
-    res.json({ success: true, data: { avatarUrl: publicUrl } });
+    return res.json({ success: true, data: { avatarUrl: publicUrl } });
   } catch (err: any) {
     req.log.error(err, "Failed to upload avatar");
-    res.status(500).json({ success: false, error: { message: err.message || "Failed to upload avatar" } });
+    return res.status(500).json({ success: false, error: { message: err.message || "Failed to upload avatar" } });
   }
 });
 
@@ -1009,10 +1024,10 @@ router.post("/orders/:id/stains", async (req, res) => {
       });
     }
 
-    res.json({ success: true, data: newPhoto });
+    return res.json({ success: true, data: newPhoto });
   } catch (err: any) {
     req.log?.error?.(err, "Failed to upload stain photo");
-    res.status(500).json({ success: false, error: { message: err.message || "Upload failed" } });
+    return res.status(500).json({ success: false, error: { message: err.message || "Upload failed" } });
   }
 });
 
@@ -1023,7 +1038,7 @@ router.post("/orders/:id/stains", async (req, res) => {
 router.delete("/users/profile", requireAuth, async (req, res) => {
   try {
     const userId = req.authUser!.userId;
-    const phone = req.authUser!.phone || "";
+    const phone = req.authUser!.phone! || "";
     req.log.info({ userId, phone }, "Processing legal right-to-erasure account deletion request");
 
     // 1. Delete from website_users
@@ -1079,7 +1094,7 @@ router.delete("/users/profile", requireAuth, async (req, res) => {
           },
           body: JSON.stringify({ prefix: avatarFilename }),
         });
-        const files: any[] = await listRes.json().catch(() => []);
+        const files = (await listRes.json().catch(() => [])) as any[];
         if (Array.isArray(files) && files.length > 0) {
           await fetch(`${baseUrl}/storage/v1/object/avatars`, {
             method: "DELETE",
@@ -1094,13 +1109,13 @@ router.delete("/users/profile", requireAuth, async (req, res) => {
       } catch (_) {}
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: "Your profile and personal data have been completely deleted as requested.",
     });
   } catch (err: any) {
     req.log.error(err, "Failed to delete user account");
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: { code: "INTERNAL_ERROR", message: "Failed to delete account. Please try again." },
     });
@@ -1114,7 +1129,7 @@ router.delete("/users/profile", requireAuth, async (req, res) => {
 router.post("/users/onboarding", requireAuth, async (req, res) => {
   try {
     const userId = req.authUser!.userId;
-    const phone = req.authUser!.phone || "";
+    const phone = req.authUser!.phone! || "";
     const { name, email, address, gstNumber, referralCode } = req.body || {};
 
     if (!name || !String(name).trim()) {
@@ -1151,7 +1166,15 @@ router.post("/users/onboarding", requireAuth, async (req, res) => {
     const addressPayload = {
       street: cleanAddress || "",
       addresses: currentAddresses,
-      gst_number: cleanGst || customer?.gst_number || "",
+      // NOTE: `customers` has no gst_number column in Supabase; GST must live
+      // inside the address JSONB, otherwise the PATCH fails and silently drops
+      // the whole profile update.
+      gst_number:
+        cleanGst ||
+        (customer?.address && typeof customer.address === "object" && !Array.isArray(customer.address)
+          ? (customer.address as Record<string, unknown>).gst_number
+          : "") ||
+        "",
     };
 
     const customerPatch: Record<string, any> = {
@@ -1161,7 +1184,6 @@ router.post("/users/onboarding", requireAuth, async (req, res) => {
     };
 
     if (cleanEmail) customerPatch.email = cleanEmail;
-    if (cleanGst) customerPatch.gst_number = cleanGst;
 
     if (customer?.id) {
       await supabaseRequest(`/rest/v1/customers?id=eq.${encodeURIComponent(customer.id)}`, "PATCH", customerPatch, {
@@ -1187,10 +1209,26 @@ router.post("/users/onboarding", requireAuth, async (req, res) => {
     if (referralCode && String(referralCode).trim()) {
       try {
         const cleanRef = String(referralCode).trim().toUpperCase();
-        const candidateUsers = await db.select().from(usersTable).where(eq(usersTable.referralCode, cleanRef)).limit(1).catch(() => []);
+        // Referral codes are derived deterministically as "FAB" + first 6 hex
+        // chars of the referrer's UUID, and `website_users` has no referral_code
+        // column. Resolve the referrer from the UUID prefix instead.
+        const refPrefix = cleanRef.startsWith("FAB") ? cleanRef.slice(3).toLowerCase() : "";
+        const isValidPrefix = /^[0-9a-f]{6}$/.test(refPrefix);
+        const candidateUsers = isValidPrefix
+          ? await db
+              .select()
+              .from(usersTable)
+              .where(sql`lower(replace(${usersTable.id}::text, '-', '')) like ${refPrefix + "%"}`)
+              .limit(1)
+              .catch(() => [])
+          : [];
         const referrer = candidateUsers?.[0];
 
-        if (referrer && referrer.phone !== phone) {
+        if (!referrer) {
+          referralMessage = `Referral code ${cleanRef} was not found.`;
+        } else if (referrer.phone === phone) {
+          referralMessage = "You cannot use your own referral code.";
+        } else {
           await supabaseRequest("/rest/v1/portal_referrals", "POST", {
             referrer_user_id: referrer.id,
             referrer_phone: referrer.phone,
@@ -1209,7 +1247,7 @@ router.post("/users/onboarding", requireAuth, async (req, res) => {
       }
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: "Profile personalized successfully!",
       referralApplied,
@@ -1225,7 +1263,7 @@ router.post("/users/onboarding", requireAuth, async (req, res) => {
     });
   } catch (err: any) {
     req.log.error(err, "Onboarding submission failed");
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: { code: "INTERNAL_ERROR", message: err.message || "Failed to save profile" },
     });
@@ -1239,7 +1277,7 @@ router.post("/users/onboarding", requireAuth, async (req, res) => {
 router.post("/users/delete-request", requireAuth, async (req, res) => {
   try {
     const userId = req.authUser!.userId;
-    const phone = req.authUser!.phone || "";
+    const phone = req.authUser!.phone! || "";
     const { reason, feedback } = req.body || {};
 
     if (!reason || !String(reason).trim()) {
@@ -1281,14 +1319,14 @@ router.post("/users/delete-request", requireAuth, async (req, res) => {
 
     req.log.info({ phone, reason }, "Logged customer account deletion request in Super Admin ledger");
 
-    res.json({
+    return res.json({
       success: true,
       message: "Your account deletion request has been registered. Our concierge team will review and process your request within 24-48 hours.",
       data: deletionPayload,
     });
   } catch (err: any) {
     req.log.error(err, "Failed to log account deletion request");
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: { code: "INTERNAL_ERROR", message: err.message || "Failed to submit deletion request" },
     });
