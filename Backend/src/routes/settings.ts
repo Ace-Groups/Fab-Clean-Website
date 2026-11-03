@@ -402,7 +402,7 @@ router.get("/settings/tag-templates/resolve", async (req, res) => {
 });
 
 // ==========================================
-// BUSINESS SETTINGS
+// BUSINESS SETTINGS & PLATFORM SETTINGS
 // ==========================================
 
 router.get("/business-settings", (_req, res) => {
@@ -426,6 +426,52 @@ router.put("/business-settings", (req, res) => {
   res.json({
     success: true,
     settings: req.body,
+  });
+});
+
+router.get("/settings/category/:category", (req, res) => {
+  const cat = req.params.category;
+  res.json({
+    success: true,
+    category: cat,
+    settings: {
+      taxRate: 18,
+      currencySymbol: "₹",
+      minimumOrderValue: 200,
+      defaultTurnaroundHours: 48,
+      expressSurchargePercent: 50,
+      enableStockAlerts: true,
+      lowStockThreshold: 10,
+      receiptHeader: "Fab Clean Premium Garment Care",
+      receiptFooter: "Thank you for choosing Fab Clean!",
+    },
+  });
+});
+
+router.get("/settings/platform", (_req, res) => {
+  res.json({
+    success: true,
+    platform: {
+      appName: "Fab Clean ERP",
+      version: "2.1.0",
+      company: "Fab Clean",
+      currency: "INR",
+      currencySymbol: "₹",
+    },
+  });
+});
+
+router.get("/settings/me", (req, res) => {
+  res.json({
+    success: true,
+    settings: {},
+  });
+});
+
+router.put("/settings/me", (req, res) => {
+  res.json({
+    success: true,
+    settings: req.body || {},
   });
 });
 

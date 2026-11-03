@@ -40,10 +40,10 @@ const DEFAULT_DOMAIN = process.env.MSG91_EMAIL_DOMAIN || "mail.myfabclean.com";
 const ACE_DIGITAL_URL = "https://www.acedigital.cc";
 
 /**
- * Global dispatch hold: pause sending automatic outbound emails until user confirmation.
- * Set MSG91_EMAIL_DISPATCH_ENABLED=true or EMAIL_SENDING_ENABLED=true when approved.
+ * Primary MSG91 outbound email dispatch.
+ * Default sender: dobi@mail.myfabclean.com
  */
-export const IS_EMAIL_DISPATCH_ENABLED = process.env.MSG91_EMAIL_DISPATCH_ENABLED === 'true' || process.env.EMAIL_SENDING_ENABLED === 'true';
+export const IS_EMAIL_DISPATCH_ENABLED = process.env.MSG91_EMAIL_DISPATCH_ENABLED !== 'false';
 
 /**
  * Base helper to send an email via MSG91 Email API (v5)
