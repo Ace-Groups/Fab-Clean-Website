@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # GCP project *ID* (not the numeric project number 254040893134).
 PROJECT_ID="${GCP_PROJECT_ID:-fab-clean-env-1234}"
 REGION="${GCP_REGION:-us-central1}"
-SERVICE="${CLOUD_RUN_SERVICE:-fab-clean-api}"
+SERVICE="${CLOUD_RUN_SERVICE:-fab-clean-website-api}"
 SHORT_SHA="$(git -C "$ROOT" rev-parse --short HEAD)"
 IMAGE="${CLOUD_RUN_IMAGE:-gcr.io/${PROJECT_ID}/${SERVICE}:${SHORT_SHA}}"
 

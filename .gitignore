@@ -14,4 +14,3 @@ dist-build
 
 # build info caches
 *.tsbuildinfo
-.firebase/
