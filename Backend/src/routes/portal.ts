@@ -54,7 +54,7 @@ function mapOrder(order: Awaited<ReturnType<typeof fetchOrdersByPhone>>[number])
     cancellationReason: order.cancellation_reason || null,
     paymentStatus: cancelled
       ? "cancelled"
-      : order.payment_status || (credit > 0 ? (advance > 0 ? "partial" : "unpaid") : "paid"),
+      : order.payment_status || (dueAmount <= 0 ? "paid" : advance > 0 ? "partial" : "unpaid"),
     paymentMethod: order.payment_method || "credit",
     advancePaid: advance,
     creditAmount: credit,

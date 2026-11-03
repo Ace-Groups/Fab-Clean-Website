@@ -34,6 +34,8 @@ import {
   insertWalletTransaction,
   insertTransaction,
   updateOrder,
+  isOrderCancelled,
+  computeOrderDue,
   type CustomerRecord,
 } from "./supabase-admin.js";
 import { sendPaidInvoiceWhatsApp } from "./whatsapp-invoice.js";
@@ -208,7 +210,7 @@ export async function autoSettleCustomerDueOrders(
     const unpaidOrders = await supabaseRequest<any[]>(
       `/rest/v1/orders?customer_id=eq.${encodeURIComponent(
         customerId,
-      )}&payment_status=in.(unpaid,partial,pending,credit)&order=created_at.asc&limit=50`,
+      )}&payment_status=in.(unpaid,partial,pending,credit)&status=neq.cancelled&order=created_at.asc&limit=50`,
       "GET",
     );
 
@@ -223,9 +225,10 @@ export async function autoSettleCustomerDueOrders(
     for (const order of unpaidOrders) {
       if (availableBalance <= 0) break;
 
+      if (isOrderCancelled(order)) continue;
       const orderTotal = Number(order.total_amount ?? 0);
       const currentAdvance = Number(order.advance_paid ?? 0);
-      const currentDue = Math.max(0, orderTotal - currentAdvance);
+      const currentDue = computeOrderDue(order);
 
       if (currentDue <= 0) {
         // Order had 0 due already, ensure clean status
@@ -456,8 +459,8 @@ export async function fetchUnifiedCustomerTransactions(
         items,
         totalAmount: total,
         advancePaid: advance,
-        dueAmount: Math.max(0, total - advance),
-        paymentStatus: order.payment_status || "paid",
+        dueAmount: computeOrderDue(order),
+        paymentStatus: isOrderCancelled(order) ? "cancelled" : order.payment_status || "paid",
         orderStatus: order.status || "booked",
         invoiceUrl: order.invoice_url || null,
         createdAt: order.created_at,

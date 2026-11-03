@@ -9,10 +9,11 @@ function normalizeStoreCode(raw: any): string {
 }
 import { Router, type IRouter } from "express";
 import crypto from "crypto";
-import { supabaseRequest, fetchCustomerByPhone } from "../lib/supabase-admin.js";
+import { supabaseRequest, fetchCustomerByPhone, isOrderCancelled, computeOrderDue } from "../lib/supabase-admin.js";
 import { recordOrderCreditDebit, recordWalletPaymentDebit } from "../lib/wallet-engine.js";
 import { isR2Configured, uploadPublicObject } from "../lib/r2.js";
 import { sendMsg91OrderInvoiceEmail, sendMsg91OrderStatusEmail } from "../lib/msg91-email.js";
+import { pool } from "@workspace/db";
 
 
 // Strict 5-Character Base32 Crockford Alphabet (no I, L, O, U to prevent visual confusion and offensive words)
@@ -149,8 +150,16 @@ function mapOrderForErp(o: any) {
     advance_paid: Number(o.advance_paid || 0),
     paymentMethod: o.payment_method || "credit",
     payment_method: o.payment_method || "credit",
-    paymentStatus: o.payment_status || "unpaid",
-    payment_status: o.payment_status || "unpaid",
+    paymentStatus: isOrderCancelled(o) ? "cancelled" : (o.payment_status || "unpaid"),
+    payment_status: isOrderCancelled(o) ? "cancelled" : (o.payment_status || "unpaid"),
+    isCancelled: isOrderCancelled(o),
+    cancellationReason: o.cancellation_reason || null,
+    cancellation_reason: o.cancellation_reason || null,
+    cancelledAt: o.cancelled_at || null,
+    cancelled_at: o.cancelled_at || null,
+    cancelledBy: o.cancelled_by || null,
+    cancelled_by: o.cancelled_by || null,
+    dueAmount: computeOrderDue(o),
     isCreditOrder: Boolean(o.is_credit_order),
     is_credit_order: Boolean(o.is_credit_order),
     creditUsed: Number(o.credit_used || 0),
@@ -388,6 +397,59 @@ router.get("/customers/:id", async (req, res) => {
   }
 });
 
+router.get("/customers/:id/profile", async (req, res) => {
+  try {
+    const customerId = req.params.id;
+    const custRes = await pool.query("SELECT * FROM customers WHERE id = $1 LIMIT 1", [customerId]);
+    let customer = custRes.rows[0];
+    if (!customer) {
+      const custPhoneRes = await pool.query("SELECT * FROM customers WHERE phone LIKE $1 LIMIT 1", [`%${customerId.slice(-10)}%`]);
+      if (custPhoneRes.rows[0]) {
+        customer = custPhoneRes.rows[0];
+      }
+    }
+    if (!customer) {
+      return res.status(404).json({ success: false, error: "Customer not found" });
+    }
+
+    const phone = customer.phone || "";
+    const cleanPhone = phone.replace(/\D/g, "");
+    const orderRes = await pool.query(
+      `SELECT * FROM orders 
+       WHERE customer_id = $1 
+          OR ($2 <> '' AND customer_phone LIKE $3)
+       ORDER BY created_at DESC 
+       LIMIT 50`,
+      [customer.id, cleanPhone, `%${cleanPhone.slice(-10)}%`]
+    );
+
+    const recentOrders = orderRes.rows.map(mapOrderForErp);
+
+    const bookingRes = await pool.query(
+      `SELECT * FROM pickups 
+       WHERE phone LIKE $1 
+       ORDER BY created_at DESC 
+       LIMIT 20`,
+      [`%${cleanPhone.slice(-10)}%`]
+    ).catch(() => ({ rows: [] }));
+
+    return res.json({
+      success: true,
+      data: {
+        customer: mapCustomer(customer),
+        recentOrders,
+        recentBookings: bookingRes.rows,
+        feedbackHistory: [],
+        customerRating: customer.customer_rating,
+        reviewCount: recentOrders.filter((o: any) => o.rating != null).length,
+      }
+    });
+  } catch (err: any) {
+    req.log?.error(err, "Failed to fetch customer profile details");
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.get("/customers", async (req, res) => {
   try {
     const { limit = "100", page = "1", search } = req.query;
@@ -511,11 +573,19 @@ router.get("/due-date-orders", async (req, res) => {
 router.get("/orders/customer/:customerId", async (req, res) => {
   try {
     const customerId = req.params.customerId;
-    const rows = await supabaseRequest<any[]>(
-      `/rest/v1/orders?customer_id=eq.${encodeURIComponent(customerId)}&order=created_at.desc&limit=50`,
-      "GET",
+    const custRes = await pool.query("SELECT id, phone FROM customers WHERE id = $1 LIMIT 1", [customerId]);
+    const phone = custRes.rows[0]?.phone || "";
+    const cleanPhone = phone.replace(/\D/g, "");
+
+    const rows = await pool.query(
+      `SELECT * FROM orders 
+       WHERE customer_id = $1 
+          OR ($2 <> '' AND customer_phone LIKE $3)
+       ORDER BY created_at DESC 
+       LIMIT 100`,
+      [customerId, cleanPhone, `%${cleanPhone.slice(-10)}%`]
     );
-    res.json(rows.map(mapOrderForErp));
+    res.json(rows.rows.map(mapOrderForErp));
   } catch (err: any) {
     req.log?.error(err, "Failed to fetch customer orders");
     res.status(500).json([]);
@@ -530,18 +600,66 @@ router.get("/orders", async (req, res, next) => {
   // If this is an ERP request with filters or from employee, handle directly here
   if (createdDate || limit || dateFrom || page || search || isEmployee) {
     try {
-      let q = "/rest/v1/orders?select=*&order=created_at.desc";
-      if (createdDate && typeof createdDate === "string") {
-        q += `&created_at=gte.${createdDate}T00:00:00Z&created_at=lte.${createdDate}T23:59:59Z`;
-      } else if (dateFrom && typeof dateFrom === "string") {
-        q += `&created_at=gte.${encodeURIComponent(dateFrom)}`;
-      }
-      const lim = Math.min(500, Number(limit) || 100);
-      q += `&limit=${lim}`;
+      // 1. Search Query (phone, order_number, customer_name, customer_id, notes)
+      if (search && typeof search === "string" && search.trim()) {
+        const searchTerm = search.trim();
+        const digitsOnly = searchTerm.replace(/\D/g, "");
+        const searchPattern = `%${searchTerm}%`;
+        const phonePattern = digitsOnly.length >= 4 ? `%${digitsOnly.slice(-10)}%` : searchPattern;
 
-      const rows = await supabaseRequest<any[]>(q, "GET");
-      const mapped = rows.map(mapOrderForErp);
-      return res.json(mapped);
+        const resRows = await pool.query(
+          `SELECT * FROM orders 
+           WHERE customer_phone LIKE $1 
+              OR order_number ILIKE $2 
+              OR customer_name ILIKE $2 
+              OR customer_id ILIKE $2
+              OR id::text ILIKE $2
+              OR notes ILIKE $2
+           ORDER BY created_at DESC 
+           LIMIT 200`,
+          [phonePattern, searchPattern]
+        );
+        return res.json(resRows.rows.map(mapOrderForErp));
+      }
+
+      // 2. Filter by Date or Default Active First Listing
+      const lim = Math.min(2000, Number(limit) || 1000);
+      
+      if (createdDate && typeof createdDate === "string") {
+        const resRows = await pool.query(
+          `SELECT * FROM orders 
+           WHERE created_at >= $1::timestamp AND created_at <= $2::timestamp
+           ORDER BY created_at DESC 
+           LIMIT $3`,
+          [`${createdDate} 00:00:00`, `${createdDate} 23:59:59`, lim]
+        );
+        return res.json(resRows.rows.map(mapOrderForErp));
+      }
+
+      if (dateFrom && typeof dateFrom === "string") {
+        const resRows = await pool.query(
+          `SELECT * FROM orders 
+           WHERE created_at >= $1::timestamp
+           ORDER BY created_at DESC 
+           LIMIT $2`,
+          [dateFrom, lim]
+        );
+        return res.json(resRows.rows.map(mapOrderForErp));
+      }
+
+      // 3. Default Listing: ALL Active Orders prioritized first so nothing is ever dropped!
+      const resRows = await pool.query(
+        `SELECT * FROM orders 
+         ORDER BY 
+           CASE 
+             WHEN status IN ('pending', 'processing', 'ready_for_pickup', 'out_for_delivery') THEN 0 
+             ELSE 1 
+           END, 
+           created_at DESC 
+         LIMIT $1`,
+        [lim]
+      );
+      return res.json(resRows.rows.map(mapOrderForErp));
     } catch (err: any) {
       req.log?.error(err, "Failed to list ERP orders");
       return res.status(500).json({ success: false, error: { message: err.message } });
