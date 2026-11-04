@@ -74,6 +74,34 @@ export async function fetchRazorpayOrder(orderId: string): Promise<{
 }
 
 /**
+ * Fetches an individual Razorpay payment record to retrieve payer details
+ * like email, contact phone, and payment method.
+ */
+export async function fetchRazorpayPayment(paymentId: string): Promise<{
+  id: string;
+  entity: string;
+  amount: number;
+  currency: string;
+  status: string;
+  order_id?: string;
+  method?: string;
+  email?: string;
+  contact?: string;
+  notes?: Record<string, string>;
+}> {
+  const authHeader = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString("base64");
+  const response = await fetch(`https://api.razorpay.com/v1/payments/${encodeURIComponent(paymentId)}`, {
+    method: "GET",
+    headers: { Authorization: `Basic ${authHeader}` },
+  });
+  const body: any = await response.json();
+  if (!response.ok) {
+    throw new Error(body?.error?.description || body?.message || "Failed to fetch Razorpay payment");
+  }
+  return body;
+}
+
+/**
  * Verifies Razorpay HMAC SHA256 Signature.
  */
 export function verifyRazorpaySignature(params: {

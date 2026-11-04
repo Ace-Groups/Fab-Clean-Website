@@ -3,6 +3,7 @@ import { requireAuth } from "../lib/auth.js";
 import {
   createRazorpayOrder,
   fetchRazorpayOrder,
+  fetchRazorpayPayment,
   verifyRazorpaySignature,
   verifyRazorpayWebhookSignature,
   getRazorpayPublicConfig,
@@ -49,14 +50,22 @@ async function settleOrderPayment(params: {
   paymentId: string;
   paymentMethodLabel: string;
   phone?: string;
+  payerEmail?: string | null;
+  payerName?: string | null;
   log?: any;
 }): Promise<void> {
-  const { order, amountPaid, paymentId, paymentMethodLabel } = params;
+  const { order, amountPaid, paymentId, paymentMethodLabel, payerEmail, payerName } = params;
   const totalAmount = Number(order.total_amount ?? 0);
   const previousAdvance = Number(order.advance_paid ?? 0);
   const customerPhone = order.customer_phone || params.phone || "";
 
-  await updateOrder(order.id, {
+  // Sanitize and validate collected payer email from Razorpay
+  const cleanEmail =
+    payerEmail && typeof payerEmail === "string" && payerEmail.includes("@") && payerEmail.includes(".")
+      ? payerEmail.trim().toLowerCase()
+      : null;
+
+  const orderUpdate: Record<string, unknown> = {
     payment_status: "paid",
     payment_method:
       previousAdvance > 0 && !String(order.payment_method || "").includes("online")
@@ -66,11 +75,32 @@ async function settleOrderPayment(params: {
     credit_used: 0,
     is_credit_order: false,
     updated_at: new Date().toISOString(),
-  });
+  };
+
+  // Auto-save payer email to order if order has no email or placeholder
+  if (cleanEmail && (!order.customer_email || !String(order.customer_email).includes("@") || String(order.customer_email).endsWith("@placeholder.com"))) {
+    orderUpdate.customer_email = cleanEmail;
+    order.customer_email = cleanEmail;
+    params.log?.info?.({ orderNumber: order.order_number, email: cleanEmail }, "Persisting Razorpay payer email to order record");
+  }
+
+  await updateOrder(order.id, orderUpdate);
 
   const customer = customerPhone
     ? await fetchCustomerByPhone(customerPhone).catch(() => null)
     : null;
+
+  // Auto-save payer email to customer profile if customer has no email or placeholder
+  if (customer?.id && cleanEmail) {
+    const existingCustEmail = customer.email ? String(customer.email).trim().toLowerCase() : "";
+    if (!existingCustEmail || !existingCustEmail.includes("@") || existingCustEmail.endsWith("@placeholder.com")) {
+      await updateCustomerById(customer.id, {
+        email: cleanEmail,
+      }).catch((cErr) => params.log?.warn?.(cErr, "Failed to persist Razorpay email to customer profile"));
+      customer.email = cleanEmail;
+      params.log?.info?.({ customerId: customer.id, email: cleanEmail }, "Persisted Razorpay payer email to customer profile");
+    }
+  }
 
   if (customer?.id && amountPaid > 0) {
     try {
@@ -104,7 +134,7 @@ async function settleOrderPayment(params: {
 
     void sendPaidInvoiceWhatsApp({
       phoneNumber: customerPhone,
-      customerName: order.customer_name || customer?.name || "Customer",
+      customerName: order.customer_name || customer?.name || payerName || "Customer",
       orderNumber: order.order_number,
       amount: amountPaid || totalAmount,
       invoiceUrl: order.invoice_url,
@@ -112,11 +142,11 @@ async function settleOrderPayment(params: {
     });
   }
 
-  const targetEmail = customer?.email || order.customer_email;
+  const targetEmail = cleanEmail || customer?.email || order.customer_email;
   if (targetEmail) {
     void sendMsg91PaymentSuccessEmail({
       customerEmail: targetEmail,
-      customerName: order.customer_name || customer?.name || "Customer",
+      customerName: order.customer_name || customer?.name || payerName || "Customer",
       amount: amountPaid || totalAmount,
       transactionId: paymentId,
       orderNumber: order.order_number,
@@ -382,11 +412,18 @@ router.post("/pay/:identifier/verify", async (req, res) => {
       });
     }
 
+    // Query Razorpay Payment API to extract payer email and details captured during checkout
+    const rzpPayment = await fetchRazorpayPayment(razorpayPaymentId).catch(() => null);
+    const payerEmail = rzpPayment?.email || req.body?.email || null;
+    const payerName = req.body?.name || rzpOrder?.notes?.customerName || null;
+
     await settleOrderPayment({
       order,
       amountPaid,
       paymentId: razorpayPaymentId,
       paymentMethodLabel: "Razorpay (Online)",
+      payerEmail,
+      payerName,
       log: req.log,
     });
 
@@ -525,6 +562,25 @@ router.post("/wallet/verify-recharge", requireAuth, async (req, res) => {
     const customer = await fetchCustomerByPhone(req.authUser!.phone!);
     if (!customer?.id) {
       return res.status(404).json({ success: false, error: { message: "Customer profile not found" } });
+    }
+
+    // Auto-capture email from Razorpay payment if customer profile lacks one
+    const rzpPayment = await fetchRazorpayPayment(razorpayPaymentId).catch(() => null);
+    const payerEmail = rzpPayment?.email || req.body?.email || null;
+    const cleanEmail =
+      payerEmail && typeof payerEmail === "string" && payerEmail.includes("@") && payerEmail.includes(".")
+        ? payerEmail.trim().toLowerCase()
+        : null;
+
+    if (cleanEmail) {
+      const existingEmail = customer.email ? String(customer.email).trim().toLowerCase() : "";
+      if (!existingEmail || !existingEmail.includes("@") || existingEmail.endsWith("@placeholder.com")) {
+        await updateCustomerById(customer.id, { email: cleanEmail }).catch((cErr) =>
+          req.log.warn(cErr, "Failed to persist Razorpay email during wallet recharge")
+        );
+        customer.email = cleanEmail;
+        req.log.info({ customerId: customer.id, email: cleanEmail }, "Persisted Razorpay email to customer profile during wallet recharge");
+      }
     }
 
     const rechargeAmount = Number(amount);
@@ -716,12 +772,16 @@ router.post("/orders/:id/verify-pay", requireAuth, async (req, res) => {
 
     const amountPaid = computeOrderDue(order);
 
+    const rzpPayment = await fetchRazorpayPayment(razorpayPaymentId).catch(() => null);
+    const payerEmail = rzpPayment?.email || req.body?.email || null;
+
     await settleOrderPayment({
       order,
       amountPaid,
       paymentId: razorpayPaymentId,
       paymentMethodLabel: "Razorpay (Online)",
       phone: req.authUser!.phone!,
+      payerEmail,
       log: req.log,
     });
 
@@ -884,6 +944,18 @@ router.post("/payments/webhook", async (req, res) => {
       const paymentLink = payload?.payment_link?.entity;
       const orderEntity = payload?.order?.entity;
 
+      // Extract payer email collected by Razorpay checkout
+      const rawPayerEmail =
+        payment?.email ||
+        paymentLink?.customer?.email ||
+        payment?.notes?.email ||
+        orderEntity?.notes?.email ||
+        null;
+      const cleanEmail =
+        rawPayerEmail && typeof rawPayerEmail === "string" && rawPayerEmail.includes("@") && rawPayerEmail.includes(".")
+          ? rawPayerEmail.trim().toLowerCase()
+          : null;
+
       const notes = {
         ...(paymentLink?.notes || {}),
         ...(payment?.notes || {}),
@@ -898,6 +970,14 @@ router.post("/payments/webhook", async (req, res) => {
         req.log.info({ customerId: notes.customerId, amount: amountInRupees, paymentId }, "Webhook: Processing wallet recharge");
         const customer = await fetchCustomerByPhone(notes.phone);
         if (customer) {
+          if (cleanEmail) {
+            const existingEmail = customer.email ? String(customer.email).trim().toLowerCase() : "";
+            if (!existingEmail || !existingEmail.includes("@") || existingEmail.endsWith("@placeholder.com")) {
+              await updateCustomerById(customer.id, { email: cleanEmail }).catch(() => {});
+              customer.email = cleanEmail;
+              req.log.info({ customerId: customer.id, email: cleanEmail }, "Webhook: Persisted Razorpay email to customer profile during wallet recharge");
+            }
+          }
           const currentBalance = Number(customer.wallet_balance_cache ?? 0);
           const newBalance = currentBalance + amountInRupees;
           await insertWalletTransaction({
@@ -950,16 +1030,36 @@ router.post("/payments/webhook", async (req, res) => {
           const customerPhone = order.customer_phone || notes.phone || "";
 
           // 1. Update Order in Supabase Postgres to PAID
-          await updateOrder(order.id, {
+          const orderUpdatePayload: Record<string, unknown> = {
             payment_status: "paid",
             payment_method: "online_razorpay",
             advance_paid: totalAmount,
             credit_used: 0,
             is_credit_order: false,
             updated_at: new Date().toISOString(),
-          });
+          };
+
+          if (cleanEmail && (!order.customer_email || !String(order.customer_email).includes("@") || String(order.customer_email).endsWith("@placeholder.com"))) {
+            orderUpdatePayload.customer_email = cleanEmail;
+            order.customer_email = cleanEmail;
+            req.log.info({ orderNumber: order.order_number, email: cleanEmail }, "Webhook: Persisted Razorpay email to order record");
+          }
+
+          await updateOrder(order.id, orderUpdatePayload);
 
           req.log.info({ orderNumber: order.order_number }, "✅ Webhook: Order marked as PAID in Supabase");
+
+          const customer = customerPhone ? await fetchCustomerByPhone(customerPhone).catch(() => null) : null;
+          if (customer?.id && cleanEmail) {
+            const existingCustEmail = customer.email ? String(customer.email).trim().toLowerCase() : "";
+            if (!existingCustEmail || !existingCustEmail.includes("@") || existingCustEmail.endsWith("@placeholder.com")) {
+              await updateCustomerById(customer.id, { email: cleanEmail }).catch((cErr) =>
+                req.log.warn(cErr, "Failed to update customer email in profile")
+              );
+              customer.email = cleanEmail;
+              req.log.info({ customerId: customer.id, email: cleanEmail }, "Webhook: Persisted Razorpay email to customer profile");
+            }
+          }
 
           // 2. Settle customer wallet & credit ledger
           if (order.customer_id && amountInRupees > 0) {
@@ -991,7 +1091,7 @@ router.post("/payments/webhook", async (req, res) => {
 
             void sendPaidInvoiceWhatsApp({
               phoneNumber: customerPhone,
-              customerName: order.customer_name || "Customer",
+              customerName: order.customer_name || customer?.name || "Customer",
               orderNumber: order.order_number,
               amount: amountInRupees || totalAmount,
               invoiceUrl: order.invoice_url,
@@ -1000,8 +1100,7 @@ router.post("/payments/webhook", async (req, res) => {
           }
 
           // 4. Dispatch Payment Received E-Receipt via MSG91 Email
-          const customer = customerPhone ? await fetchCustomerByPhone(customerPhone).catch(() => null) : null;
-          const targetEmail = customer?.email || (order as any).customer_email;
+          const targetEmail = cleanEmail || customer?.email || (order as any).customer_email;
           if (targetEmail) {
             void sendMsg91PaymentSuccessEmail({
               customerEmail: targetEmail,
