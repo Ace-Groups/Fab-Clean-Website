@@ -21,7 +21,9 @@ const DEFAULT_CORS_ORIGINS = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
   "http://localhost:8081",
+  "http://127.0.0.1:8081",
   "http://localhost:19006",
+  "http://127.0.0.1:19006",
 ];
 
 function resolveCorsOrigins(): string[] {
@@ -29,6 +31,11 @@ function resolveCorsOrigins(): string[] {
     .map((o) => o.trim())
     .filter(Boolean);
   return fromEnv?.length ? fromEnv : DEFAULT_CORS_ORIGINS;
+}
+
+function isDevLoopbackOrigin(origin: string): boolean {
+  // Expo / Vite local web often switches between localhost and 127.0.0.1.
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
 }
 
 const app: Express = express();
@@ -98,7 +105,7 @@ app.use(
   cors({
     origin(origin, callback) {
       // Same-origin or server-to-server (no Origin header)
-      if (!origin || corsOrigins.includes(origin)) {
+      if (!origin || corsOrigins.includes(origin) || isDevLoopbackOrigin(origin)) {
         callback(null, origin ?? corsOrigins[0]);
         return;
       }
