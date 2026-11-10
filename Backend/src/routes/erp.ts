@@ -1484,6 +1484,16 @@ router.post(['/erp/app-management/banners', '/api/erp/app-management/banners'], 
     const { banner } = req.body || {};
     if (!banner?.id) return res.status(400).json({ success: false, error: 'Banner ID is required' });
 
+    // Browsers reject "Https://" as a relative path — always store canonical https URLs.
+    if (banner.imageUrl) {
+      const raw = String(banner.imageUrl).trim();
+      if (/^https?:\/\//i.test(raw)) {
+        banner.imageUrl = raw.replace(/^http:\/\//i, 'https://').replace(/^Https:\/\//, 'https://');
+      } else if (raw.startsWith('//')) {
+        banner.imageUrl = `https:${raw}`;
+      }
+    }
+
     await supabaseRequest('/rest/v1/settings', 'POST', {
       key: `banner_${banner.id}`,
       value: JSON.stringify(banner),

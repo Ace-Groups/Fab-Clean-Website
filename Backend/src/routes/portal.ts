@@ -1297,27 +1297,59 @@ router.post("/users/delete-request", requireAuth, async (req, res) => {
 
 /**
  * GET /api/app/promotions
- * Returns active app promotional posters and campaigns
+ * Live posters from ERP App Hub (Supabase settings category = app_banner).
  */
-router.get("/app/promotions", async (req, res) => {
+router.get("/app/promotions", async (_req, res) => {
   try {
-    const defaultPromotions = [
-      {
-        id: "diwali_special_50",
-        title: "Diwali Special: 50% OFF on All Dry Cleaning Services",
-        subtitle: "Relax this Diwali... Let us take care of your special garments! Use Code FABDIWALI",
-        code: "FABDIWALI",
-        discountPercent: 50,
-        badge: "DIWALI SPECIAL 50% OFF",
-        imageUrl: "/diwali-special.jpg",
-        validTill: "5 Nov 2026",
-        isActive: true,
-      },
-    ];
+    const rows = await supabaseRequest<any[]>(
+      "/rest/v1/settings?category=eq.app_banner&select=key,value,updated_at&order=updated_at.desc",
+      "GET",
+    ).catch(() => []);
 
-    res.json({
+    const seen = new Set<string>();
+    const banners = (rows || [])
+      .map((r: any) => {
+        try {
+          return typeof r.value === "string" ? JSON.parse(r.value) : r.value;
+        } catch {
+          return null;
+        }
+      })
+      .filter((b: any) => b && b.isActive !== false && b.id)
+      .map((b: any) => {
+        let imageUrl = String(b.imageUrl || "").trim();
+        if (/^https?:\/\//i.test(imageUrl)) {
+          imageUrl = imageUrl.replace(/^http:\/\//i, "https://").replace(/^Https:\/\//, "https://");
+        } else if (imageUrl.startsWith("//")) {
+          imageUrl = `https:${imageUrl}`;
+        }
+        return { ...b, imageUrl };
+      })
+      .filter((b: any) => {
+        if (seen.has(b.id)) return false;
+        seen.add(b.id);
+        return true;
+      });
+
+    if (banners.length > 0) {
+      return res.json({ success: true, banners, source: "supabase:app_banner" });
+    }
+
+    return res.json({
       success: true,
-      banners: defaultPromotions,
+      banners: [
+        {
+          id: "diwali_special_50",
+          title: "Diwali Special: 50% OFF on All Dry Cleaning Services",
+          subtitle: "Relax this Diwali... Let us take care of your special garments! Use Code FABDIWALI",
+          code: "FABDIWALI",
+          discountPercent: 50,
+          badge: "DIWALI SPECIAL 50% OFF",
+          imageUrl: "/diwali-special.jpg",
+          validTill: "5 Nov 2026",
+          isActive: true,
+        },
+      ],
     });
   } catch (err: any) {
     res.json({ success: true, banners: [] });

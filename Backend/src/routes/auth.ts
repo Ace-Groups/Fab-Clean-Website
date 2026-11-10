@@ -66,7 +66,25 @@ function createOtpSession(phone: string, otp: string, widgetReqId?: string): Otp
   };
 }
 
-function toSessionUser(user: { id: string; phone: string; customerId: string | null; name: string | null; email: string | null; createdAt: Date }): SessionUser {
+function readAddresses(user: { addresses?: string[] | null }): string[] {
+  return Array.isArray(user.addresses)
+    ? user.addresses.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
+    : [];
+}
+
+function toSessionUser(user: {
+  id: string;
+  phone: string;
+  customerId: string | null;
+  name: string | null;
+  email: string | null;
+  createdAt: Date;
+  avatarUrl?: string | null;
+  addresses?: string[] | null;
+}): SessionUser & { address?: string; addresses?: string[]; avatarUrl?: string } {
+  const addresses = readAddresses(user);
+  const hasName = Boolean(user.name && user.name.trim());
+  const hasAddress = addresses.length > 0;
   return {
     id: user.id,
     phone: user.phone,
@@ -74,8 +92,12 @@ function toSessionUser(user: { id: string; phone: string; customerId: string | n
     name: user.name ?? undefined,
     email: user.email ?? undefined,
     createdAt: user.createdAt.toISOString(),
-    avatar: undefined,
-    hasCompletedOnboarding: false,
+    avatar: user.avatarUrl ?? undefined,
+    avatarUrl: user.avatarUrl ?? undefined,
+    address: addresses[0],
+    addresses,
+    // No dedicated DB column — derive from profile completeness (name + address).
+    hasCompletedOnboarding: hasName && hasAddress,
     tierPoints: 0,
     tier: "fresh",
     referralCode: user.id.replace(/-/g, "").slice(0, 8).toUpperCase(),
@@ -748,12 +770,42 @@ router.patch("/auth/me", requireAuth, async (req, res) => {
   try {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : undefined;
     const email = typeof req.body?.email === "string" ? req.body.email.trim() : undefined;
+    const avatarUrl =
+      typeof req.body?.avatarUrl === "string"
+        ? req.body.avatarUrl.trim()
+        : typeof req.body?.avatar === "string"
+          ? req.body.avatar.trim()
+          : undefined;
+
+    let addresses: string[] | undefined;
+    if (Array.isArray(req.body?.addresses)) {
+      addresses = req.body.addresses
+        .filter((a: unknown): a is string => typeof a === "string" && a.trim().length > 0)
+        .map((a: string) => a.trim());
+    } else if (typeof req.body?.address === "string" && req.body.address.trim()) {
+      addresses = [req.body.address.trim()];
+    }
+
+    // Reject inline data-URL avatars — portal uploads go through /users/avatar → R2.
+    if (avatarUrl?.startsWith("data:")) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Upload photos via the avatar endpoint (Cloudflare R2).",
+        },
+      });
+      return;
+    }
 
     const [updatedUser] = await db
       .update(usersTable)
       .set({
         ...(name !== undefined ? { name: name || null } : {}),
         ...(email !== undefined ? { email: email || null } : {}),
+        ...(avatarUrl !== undefined ? { avatarUrl: avatarUrl || null } : {}),
+        ...(addresses !== undefined ? { addresses } : {}),
+        updatedAt: new Date(),
       })
       .where(eq(usersTable.id, req.authUser!.userId))
       .returning();
